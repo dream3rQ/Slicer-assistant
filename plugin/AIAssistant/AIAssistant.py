@@ -6,6 +6,7 @@ from UM.Logger import Logger
 
 from .agent import config
 from .server import ChatServer
+from .slicer_chat import SlicerChat
 from .slicer_ui import SlicerUI
 
 PREFERRED_PORT = 8765
@@ -18,11 +19,13 @@ class AIAssistant(Extension):
         self._lock = threading.Lock()
         config.init()
         self._ui = SlicerUI(self)
+        self._chat = SlicerChat(self, self._ui)
         self.setMenuName("AI Assistant")
         self.addMenuItem("Open chat", self.showChat)
+        self.addMenuItem("Open chat in browser", self.showChatInBrowser)
         self.addMenuItem("New conversation", self.newConversation)
 
-    def _ensure_server(self):
+    def ensureServer(self):
         with self._lock:
             if self._server is None:
                 # A fixed port keeps the page's origin, so the browser remembers the
@@ -40,11 +43,18 @@ class AIAssistant(Extension):
         return self._server
 
     def url(self):
-        return "http://127.0.0.1:%d/" % self._ensure_server().server_port
+        return "http://127.0.0.1:%d/" % self.ensureServer().server_port
 
     def showChat(self):
+        # The chat lives in a slicer window; the browser page is the fallback
+        # (and the same conversation, so both can be open at once).
+        if not self._chat.show():
+            self.showChatInBrowser()
+
+    def showChatInBrowser(self):
         webbrowser.open(self.url())
 
     def newConversation(self):
-        self._ensure_server().reset_session()
-        webbrowser.open(self.url())
+        self.ensureServer()
+        self._chat.newConversation()
+        self.showChat()

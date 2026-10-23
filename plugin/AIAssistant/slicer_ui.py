@@ -80,6 +80,10 @@ class SlicerUI(QObject):
         self._window.raise_()
         self._window.requestActivate()
 
+    def reshow(self):
+        if self._proposal is not None:
+            self._show()
+
     def _close(self):
         self._proposal = None
         if self._window is not None:
