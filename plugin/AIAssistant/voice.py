@@ -1,0 +1,347 @@
+# Voice input: records the microphone in the plugin itself and turns speech
+# into text through the gateway's /audio/transcriptions. Recording in Python
+# (Windows MCI via ctypes, no extra packages) works the same for the browser
+# chat and for a chat window inside the slicer, with no browser permissions.
+#
+# Thread rules for callers: start(), stop() and cancel() are quick and safe from
+# the Qt main thread (MCI runs on its own thread); transcribe() blocks on the
+# network, so call it from a worker thread. Failures raise VoiceError, an
+# llm.LLMError with a message that can be shown to the user as is.
+import json
+import os
+import queue
+import re
+import ssl
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+from collections import OrderedDict
+
+from .agent import config, llm
+
+# Stored in steslicer.cfg next to the agent's settings (config.PREFIX).
+DEFAULTS = OrderedDict([
+    ("voice_engine", "auto"),     # auto | plugin | server | browser, see web/app.js
+    ("voice_model", ""),          # empty = pick a *transcribe* / whisper model from /models
+    ("voice_autosend", False),    # send the recognized text right away
+])
+ENGINES = ("auto", "plugin", "server", "browser")
+MAX_AUDIO = 20 * 1024 * 1024
+MAX_RECORD_SEC = 300              # a forgotten recording is dropped after this
+# Vocabulary hint for the speech model, so print terms come out spelled right.
+# Kept to one short sentence: on short recordings the model sometimes echoes
+# the prompt into the text (see _strip_prompt_echo).
+TRANSCRIBE_PROMPT = ("STE Slicer, 3D-печать: Proto PLA, Enduse PETG, Fiberpart PA12, Sealant TPU, режимы 5D и "
+                     "5D Spiral, высота слоя, поддержки, кайма, ретракт.")
+
+
+class VoiceError(llm.LLMError):
+    pass
+
+
+# ---------- settings
+
+def _prefs():
+    from UM.Application import Application
+    return Application.getInstance().getPreferences()
+
+
+def init():
+    prefs = _prefs()
+    for key, default in DEFAULTS.items():
+        prefs.addPreference(config.PREFIX + key, default)
+
+
+def get(key):
+    value = _prefs().getValue(config.PREFIX + key)
+    default = DEFAULTS[key]
+    if value is None:
+        return default
+    if isinstance(default, bool):
+        return value.strip().lower() in ("1", "true", "yes", "on") if isinstance(value, str) else bool(value)
+    return str(value)
+
+
+def set_many(values):
+    if not values:
+        return
+    prefs = _prefs()
+    for key, value in values.items():
+        if key not in DEFAULTS or (key == "voice_engine" and value not in ENGINES):
+            continue
+        if key == "voice_model":
+            value = " ".join(str(value or "").split())  # it goes into a multipart field
+            forget_model()
+        prefs.setValue(config.PREFIX + key, value)
+    try:
+        from UM.Application import Application
+        Application.getInstance().savePreferences()
+    except Exception:
+        pass
+
+
+def public():
+    data = {key: get(key) for key in DEFAULTS}
+    data["voice_native"] = is_available()
+    return data
+
+
+# ---------- recording (Windows MCI)
+
+def is_available():
+    """True when the plugin can record by itself (Windows with winmm)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.winmm.mciSendStringW)
+    except Exception:
+        return False
+
+
+class _Recorder(object):
+    ALIAS = "steai_voice"
+
+    def __init__(self):
+        self._jobs = queue.Queue()
+        self._thread = None
+        self._started = None
+        self._timer = None
+
+    # MCI calls all go through one thread, whoever asks for them.
+    def _run(self, fn):
+        if self._thread is None or not self._thread.is_alive():
+            self._thread = threading.Thread(target=self._loop, name="ste-ai-voice", daemon=True)
+            self._thread.start()
+        done = threading.Event()
+        box = {}
+        self._jobs.put((fn, box, done))
+        if not done.wait(15):
+            raise VoiceError("Звуковая система не отвечает, попробуйте ещё раз")
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
+
+    def _loop(self):
+        while True:
+            fn, box, done = self._jobs.get()
+            try:
+                box["result"] = fn()
+            except Exception as e:
+                box["error"] = e if isinstance(e, VoiceError) else VoiceError("Ошибка записи звука: %s" % e)
+            done.set()
+
+    def _mci(self, command):
+        import ctypes
+        out = ctypes.create_unicode_buffer(256)
+        err = ctypes.windll.winmm.mciSendStringW(command, out, 256, None)
+        if err:
+            msg = ctypes.create_unicode_buffer(256)
+            ctypes.windll.winmm.mciGetErrorStringW(err, msg, 256)
+            raise VoiceError("Не удалось записать звук: %s (код MCI %d). Проверьте, что микрофон подключён "
+                             "и включён в параметрах звука Windows." % (msg.value or "ошибка", err))
+        return out.value
+
+    def _close(self):
+        try:
+            self._mci("close " + self.ALIAS)
+        except VoiceError:
+            pass
+
+    def recording(self):
+        return self._started is not None
+
+    def start(self):
+        if not is_available():
+            raise VoiceError("Запись звука в плагине работает только на Windows")
+
+        def job():
+            if self._started is not None:
+                return
+            self._close()
+            self._mci("open new type waveaudio alias " + self.ALIAS)
+            try:
+                self._mci("set %s time format ms bitspersample 16 channels 1 samplespersec 16000 "
+                          "bytespersec 32000 alignment 2" % self.ALIAS)
+            except VoiceError:
+                pass  # the device default (11 kHz mono) is still fine for speech
+            try:
+                self._mci("record " + self.ALIAS)
+            except VoiceError:
+                self._close()
+                raise
+            self._started = time.time()
+
+        self._run(job)
+        self._arm_timer()
+
+    def stop(self):
+        """Ends the recording and returns it as WAV bytes."""
+        def job():
+            if self._started is None:
+                raise VoiceError("Запись не идёт: нажмите микрофон, чтобы начать")
+            self._started = None
+            path = os.path.join(_short_temp_dir(), "steai_voice_%d.wav" % os.getpid())
+            try:
+                self._mci("stop " + self.ALIAS)
+                self._mci('save %s "%s"' % (self.ALIAS, path))
+            finally:
+                self._close()
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            finally:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+        self._disarm_timer()
+        return self._run(job)
+
+    def cancel(self):
+        def job():
+            self._started = None
+            self._close()
+
+        self._disarm_timer()
+        if is_available():
+            self._run(job)
+
+    def _arm_timer(self):
+        self._disarm_timer()
+        self._timer = threading.Timer(MAX_RECORD_SEC, self.cancel)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _disarm_timer(self):
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+
+def _short_temp_dir():
+    # MCI may fail on paths with spaces or Cyrillic (C:\Users\Ник\...); the 8.3
+    # short form of the temp folder is plain ASCII.
+    path = tempfile.gettempdir()
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(512)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, 512):
+            return buf.value
+    except Exception:
+        pass
+    return path
+
+
+recorder = _Recorder()
+start = recorder.start
+stop = recorder.stop
+cancel = recorder.cancel
+
+
+# ---------- speech to text
+
+_model_cache = {}
+
+
+def forget_model():
+    """Call when the gateway (URL or key) changes: it may name the model differently."""
+    _model_cache.clear()
+
+
+def _pick_model():
+    """The gateway's speech-to-text model: the one set in the settings, else the
+    best *transcribe* / whisper model it lists, else the OpenAI default name."""
+    chosen = get("voice_model").strip()
+    if chosen:
+        return chosen
+    if "model" in _model_cache:
+        return _model_cache["model"]
+    try:
+        models = llm.list_models()
+    except llm.LLMError:
+        models = []
+
+    def rank(name):
+        low = name.lower()
+        if "transcribe" in low:
+            return 0 if "mini" in low else 1
+        return 2 if "whisper" in low else 3
+
+    found = sorted((m for m in models if rank(m) < 3), key=rank)
+    _model_cache["model"] = found[0] if found else "gpt-4o-mini-transcribe"
+    return _model_cache["model"]
+
+
+def transcribe(audio, mime="audio/wav"):
+    """POST <llm_url>/audio/transcriptions (OpenAI-compatible); the key stays in
+    the plugin. Returns {"text", "model"}."""
+    if not audio:
+        raise VoiceError("Пустая запись: микрофон ничего не передал")
+    if len(audio) > MAX_AUDIO:
+        raise VoiceError("Слишком длинная запись, разбейте на части")
+    mime = (mime or "audio/wav").split(";")[0].strip()
+    ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav",
+           "audio/webm": "webm"}.get(mime, "wav")
+    model = _pick_model()
+    boundary = "steai" + uuid.uuid4().hex
+    parts = []
+    for name, value in (("model", model), ("language", "ru"), ("prompt", TRANSCRIBE_PROMPT),
+                        ("response_format", "json")):
+        parts.append(('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                      % (boundary, name, value)).encode("utf-8"))
+    parts.append(('--%s\r\nContent-Disposition: form-data; name="file"; filename="speech.%s"\r\n'
+                  'Content-Type: %s\r\n\r\n' % (boundary, ext, mime)).encode("utf-8"))
+    parts.append(audio)
+    parts.append(("\r\n--%s--\r\n" % boundary).encode("utf-8"))
+    headers = {"Content-Type": "multipart/form-data; boundary=" + boundary, "Accept": "application/json"}
+    key = config.get("llm_key") or ""
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(llm._endpoint("/audio/transcriptions"), data=b"".join(parts),
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=llm._ssl_context()) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")[:400]
+        except Exception:
+            detail = ""
+        forget_model()  # re-pick next time
+        if e.code in (401, 403):
+            raise VoiceError("Шлюз отклонил ключ при распознавании речи (HTTP %s). %s" % (e.code, detail))
+        raise VoiceError("Шлюз не распознал речь моделью %s (HTTP %s): %s" % (model, e.code, detail))
+    except ssl.SSLError as e:
+        raise VoiceError("Ошибка SSL при распознавании речи: %s" % e)
+    except urllib.error.URLError as e:
+        raise VoiceError("Не удалось подключиться к шлюзу для распознавания речи: %s" % e.reason)
+    try:
+        text = json.loads(raw).get("text", "")
+    except (ValueError, AttributeError):
+        text = raw  # response_format=text on some gateways
+    return {"text": _strip_prompt_echo(text or ""), "model": model}
+
+
+def _words(text):
+    return re.findall(r"[\w°]+", text.lower())
+
+
+def _strip_prompt_echo(text):
+    """Drops sentences that are the prompt repeated back rather than speech:
+    contained in it, or made almost only of its words."""
+    prompt_flat = " ".join(_words(TRANSCRIBE_PROMPT))
+    prompt_words = set(_words(TRANSCRIBE_PROMPT))
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        words = _words(sentence)
+        if words and len(" ".join(words)) >= 12 and " ".join(words) in prompt_flat:
+            continue
+        if len(words) >= 5 and sum(w in prompt_words for w in words) >= 0.8 * len(words):
+            continue
+        kept.append(sentence)
+    return " ".join(kept).strip()
