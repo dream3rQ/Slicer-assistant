@@ -19,6 +19,8 @@ from .prompt import build_system_prompt
 MODEL_EXT = (".stl", ".obj", ".3mf")
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
 DOC_EXT = (".docx", ".txt", ".md")
+# fn(session, event) called on every event, from whatever thread emitted it (slicer_ui.py).
+LISTENERS = []
 MAX_TOOL_RESULT_CHARS = 12000      # hard cap, always
 COMPACT_TOOL_RESULT_CHARS = 4000   # cap when compact_history is on
 
@@ -44,6 +46,7 @@ class Session:
         self.busy = False
         self.cancel_requested = False
         self.session_tokens = 0
+        self.proposal = None   # apply_plan waiting for the user's decision, see _confirm_plan
         self.mcp = McpServer(context_factory=lambda: ToolContext(self))
 
     # ---- events
@@ -51,6 +54,11 @@ class Session:
         with self.lock:
             event = {"seq": len(self.events) + 1, "type": kind, "time": time.time(), "data": data}
             self.events.append(event)
+        for listener in LISTENERS:
+            try:
+                listener(self, event)
+            except Exception:
+                Logger.logException("w", "AI Assistant event listener failed")
         return event
 
     def events_after(self, seq):
@@ -88,21 +96,42 @@ class Session:
         return {k: v for k, v in item.items() if k not in ("data_url", "path", "text")}
 
     # ---- conversation
-    def post_user_message(self, text, attachment_ids):
+    def post_user_message(self, text, attachment_ids, hint=None):
+        """hint: extra words for the LLM only, e.g. the 3D/5D chip from the slicer panel."""
         with self.lock:
+            if self.proposal is not None and text:
+                # Typing while the plan card is open = "Уточнить" with that text.
+                self.emit("user", {"text": text, "attachments": []})
+                self._answer(self.proposal, {"action": "revise", "text": text})
+                return
             if self.busy:
                 raise RuntimeError("Ассистент ещё отвечает на предыдущее сообщение")
             self.busy = True
             self.cancel_requested = False
         attachments = [self.uploads[a] for a in attachment_ids or [] if a in self.uploads]
-        self.emit("user", {"text": text, "attachments": [
+        self.emit("user", {"text": text, "hint": hint, "attachments": [
             {"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in attachments]})
-        self.messages.append({"role": "user", "content": _user_content(text, attachments)})
+        self.messages.append({"role": "user", "content": _user_content(text + ("\n" + hint if hint else ""), attachments)})
         thread = threading.Thread(target=self._run, name="ste-ai-agent", daemon=True)
         thread.start()
 
     def cancel(self):
         self.cancel_requested = True
+
+    def answer_proposal(self, proposal_id, action, overrides=None, skip=None, text=None):
+        if action not in PROPOSAL_ACTIONS:
+            raise ValueError("action: одно из %s" % ", ".join(PROPOSAL_ACTIONS))
+        with self.lock:
+            proposal = self.proposal
+            if proposal is None or proposal["id"] != proposal_id:
+                raise RuntimeError("Предложение уже закрыто")
+            self._answer(proposal, {"action": action, "overrides": dict(overrides or {}),
+                                    "skip": list(skip or []), "text": (text or "").strip()})
+
+    def _answer(self, proposal, answer):
+        if proposal["answer"] is None:
+            proposal["answer"] = answer
+            proposal["event"].set()
 
     def _run(self):
         context = ToolContext(self)
@@ -181,7 +210,10 @@ class Session:
         self.emit("tool_call", {"id": call.get("id"), "name": name, "arguments": args})
         started = time.time()
         if args is not None:
-            result, is_error = self.mcp.call_tool(name, args, context)
+            if name == "apply_plan" and config.get("confirm_plan"):
+                result, is_error = self._confirm_plan(call.get("id"), args, context)
+            else:
+                result, is_error = self.mcp.call_tool(name, args, context)
         self.emit("tool_result", {"id": call.get("id"), "name": name, "ok": not is_error,
                                   "result": result, "ms": int((time.time() - started) * 1000)})
         text = json.dumps(result, ensure_ascii=False)
@@ -189,6 +221,49 @@ class Session:
         if len(text) > cap:
             text = text[:cap] + "…(обрезано)"
         self.messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": text})
+
+    def _confirm_plan(self, call_id, args, context):
+        """Show the plan as a card and wait for the user. Waiting inside the tool call
+        keeps it one agent run: "Применить" costs no extra LLM step, and the LLM's
+        history stays an unchanged prefix (prompt cache). MCP clients and the
+        parameter panel call apply_plan directly, without a card."""
+        preview, is_error = self.mcp.call_tool("preview_plan", args, context)
+        items = [] if is_error else preview.get("items") or []
+        if all(i.get("unchanged") and not i.get("error") for i in items):
+            return self.mcp.call_tool("apply_plan", args, context)  # nothing to confirm; errors are apply_plan's to report
+        proposal = {"id": "p_" + uuid.uuid4().hex[:6], "event": threading.Event(), "answer": None}
+        with self.lock:
+            self.proposal = proposal
+        self.emit("proposal", {"id": proposal["id"], "call_id": call_id, "extruder": preview["extruder"],
+                               "items": preview["items"]})
+        try:
+            while not proposal["event"].wait(0.3):
+                if self.cancel_requested:
+                    break
+        finally:
+            with self.lock:
+                self.proposal = None
+        answer = proposal["answer"]
+        if answer is None:
+            self.emit("proposal_closed", {"id": proposal["id"], "action": "cancel"})
+            return {"status": "cancelled", "note": "Пользователь остановил работу, план не применён"}, False
+        self.emit("proposal_closed", dict(answer, id=proposal["id"]))
+        if answer["action"] == "apply":
+            plan, changed, skipped = _edited_plan(args, preview["items"], answer)
+            result, is_error = self.mcp.call_tool("apply_plan", plan, context)
+            result["user_decision"] = "применено пользователем"
+            if changed:
+                result["user_changed"] = changed
+            if skipped:
+                result["user_skipped"] = skipped
+            if changed or skipped:
+                result["note"] = "Пользователь поправил план: объясняй по фактическим значениям, его правки не отменяй"
+            return result, is_error
+        if answer["action"] == "revise":
+            return {"status": "not_applied", "user_feedback": answer["text"],
+                    "next": "Ответь на вопрос или учти замечание, затем снова вызови apply_plan с исправленным планом"}, False
+        return {"status": "rejected", "user_feedback": answer["text"],
+                "next": "Ничего не применяй и не нарезай: коротко ответь и жди указаний пользователя"}, False
 
     def _request_messages(self, with_images):
         """History as sent to the LLM. The provider caches the longest unchanged
@@ -208,6 +283,37 @@ class Session:
 
     def transcript(self):
         return {"session": self.id, "events": self.events}
+
+
+PROPOSAL_ACTIONS = ("apply", "revise", "reject")
+
+
+def _same(a, b):
+    return a == b or str(a).strip().lower() == str(b).strip().lower()
+
+
+def _edited_plan(args, items, answer):
+    """apply_plan arguments with the user's edits from the card: overrides
+    {item id: value} and skip [item id]; item ids are mode, material_id,
+    quality_type and settings.<key>."""
+    overrides, skip = answer.get("overrides") or {}, set(answer.get("skip") or [])
+    plan = {k: v for k, v in args.items() if k not in ("mode", "material_id", "quality_type", "settings", "reasons")}
+    settings, changed, skipped = {}, {}, []
+    for item in items:
+        item_id = item["id"]
+        if item_id in skip:
+            skipped.append(item_id)
+            continue
+        value = overrides.get(item_id, item["proposed"])
+        if item_id in overrides and not _same(value, item["proposed"]):
+            changed[item_id] = {"proposed": item["proposed"], "chosen": value}
+        if item["kind"] == "setting":
+            settings[item_id[len("settings."):]] = value
+        else:
+            plan[item_id] = value
+    if settings:
+        plan["settings"] = settings
+    return plan, changed, skipped
 
 
 def _user_content(text, attachments):

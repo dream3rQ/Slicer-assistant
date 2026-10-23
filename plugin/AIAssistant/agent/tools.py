@@ -1077,8 +1077,10 @@ def save_results(ctx, folder_name=None):
        "material_id": {"type": "string"},
        "quality_type": {"type": "string"},
        "settings": {"type": "object", "description": "{ключ: значение}, например {\"wall_line_count\": 6}"},
-       "extruder": {"type": "integer", "description": "По умолчанию экструдер объекта"}})
-def apply_plan(ctx, mode=None, material_id=None, quality_type=None, settings=None, extruder=None):
+       "extruder": {"type": "integer", "description": "По умолчанию экструдер объекта"},
+       "reasons": {"type": "object", "description": "Пользователь видит их до применения: {mode|material_id|"
+                                                    "quality_type|ключ настройки: причина, до 10 слов}"}})
+def apply_plan(ctx, mode=None, material_id=None, quality_type=None, settings=None, extruder=None, reasons=None):
     out = OrderedDict()
     errors = []
 
@@ -1118,6 +1120,127 @@ def apply_plan(ctx, mode=None, material_id=None, quality_type=None, settings=Non
     if errors:
         out["problems"] = errors
     return out
+
+
+_catalogs = []
+
+
+def _tr(context, text):
+    """The settings panel shows definition texts through the translation catalog; show the same words."""
+    if not text:
+        return text
+    try:
+        if not _catalogs:
+            from UM.i18n import i18nCatalog
+            _catalogs.extend(i18nCatalog(name) for name in ("fdmprinter.def.json", "fdmextruder.def.json"))
+        for catalog in _catalogs:
+            translated = catalog.i18nc(context, str(text))
+            if translated and translated != text:
+                return translated
+    except Exception:
+        pass
+    return text
+
+
+# Plan card sections, in display order: Cura setting category -> section.
+PLAN_GROUPS = [
+    ("Режим, материал и профиль", ()),
+    ("Геометрия и прочность", ("printing_mode_category", "reinforcement", "resolution", "shell", "infill")),
+    ("Температура и скорость", ("material", "speed", "travel", "cooling")),
+    ("Адгезия и поддержки", ("support", "platform_adhesion")),
+    ("Прочее", ()),
+]
+
+
+def _category(key):
+    try:
+        found = _global_stack().definition.findDefinitions(key=key)
+        node = found[0] if found else None
+        while node is not None and node.parent is not None:
+            node = node.parent
+        return node.key if node is not None else None
+    except Exception:
+        return None
+
+
+def _plan_group(item):
+    if item["kind"] != "setting":
+        return PLAN_GROUPS[0][0]
+    category = _category(item.get("key") or "")
+    for name, categories in PLAN_GROUPS:
+        if category in categories:
+            return name
+    return PLAN_GROUPS[-1][0]
+
+
+@tool("preview_plan",
+      "Что изменит apply_plan: текущие и предлагаемые значения, варианты и предупреждения, без применения.",
+      TOOLS["apply_plan"]["inputSchema"]["properties"], for_llm=False)
+def preview_plan(ctx, mode=None, material_id=None, quality_type=None, settings=None, extruder=None, reasons=None):
+    reasons = reasons or {}
+    gs = _global_stack()
+    position = _default_extruder(extruder)
+    items = []
+
+    def item(item_id, kind, label, current, proposed, options, reason):
+        entry = OrderedDict([("id", item_id), ("kind", kind), ("label", label), ("current", current),
+                             ("proposed", proposed), ("unchanged", current == proposed), ("reason", reason)])
+        if options is not None:
+            entry["options"] = options
+            if proposed not in [o["value"] for o in options]:
+                entry["error"] = "Нет такого варианта"
+        items.append(entry)
+        return entry
+
+    if mode:
+        options = gs.getProperty("printing_mode", "options") or {}
+        item("mode", "mode", "Режим печати", gs.getProperty("printing_mode", "value"), mode,
+             [{"value": m, "label": _tr("printing_mode option %s" % m, options.get(m, m))}
+              for m in PRINT_MODES_ALLOWED if not options or m in options], reasons.get("mode"))
+    if material_id:
+        active = _extruder_stack(position).material
+        item("material_id", "material", "Материал", active.getMetaDataEntry("base_file", active.getId()), material_id,
+             [{"value": m["material_id"], "label": m["name"] or m["material_id"]}
+              for m in _available_materials(position)], reasons.get("material_id") or reasons.get("material"))
+    if quality_type:
+        profiles = [p for p in list_quality_profiles(ctx)["profiles"] if p["available"]]
+        item("quality_type", "quality", "Профиль качества", _app().getMachineManager().activeQualityType, quality_type,
+             [{"value": p["quality_type"], "label": "%s (слой %s мм)" % (p["name"], p["layer_height"])}
+              if p["layer_height"] is not None else {"value": p["quality_type"], "label": p["name"]}
+              for p in profiles], reasons.get("quality_type") or reasons.get("quality"))
+    for key, value in (settings or {}).items():
+        try:
+            stack = _target_stacks(key, extruder)[0]
+        except ToolError as e:
+            entry = item("settings." + key, "setting", key, None, value, None, reasons.get(key))
+            entry["error"] = str(e)
+            continue
+        options = stack.getProperty(key, "options")
+        entry = item("settings." + key, "setting", _tr("%s label" % key, stack.getProperty(key, "label")),
+                     _jsonable(stack.getProperty(key, "value")), value,
+                     [{"value": k, "label": _tr("%s option %s" % (key, k), v)} for k, v in options.items()]
+                     if options else None, reasons.get(key))
+        entry["key"] = key
+        entry["type"] = stack.getProperty(key, "type")
+        entry["unit"] = stack.getProperty(key, "unit")
+        for prop in ("minimum_value", "maximum_value"):
+            limit = _jsonable(stack.getProperty(key, prop))
+            if isinstance(limit, (int, float)) and not isinstance(limit, bool):
+                entry[prop.split("_")[0]] = limit
+        try:
+            entry["proposed"] = _jsonable(_coerce(stack, key, value))
+            entry["unchanged"] = entry["proposed"] == entry["current"]
+            entry.pop("error", None)
+            warning = _range_warning(stack, key, entry["proposed"])
+            if warning:
+                entry["warning"] = warning
+        except ToolError as e:
+            entry["error"] = str(e)
+    order = [name for name, _ in PLAN_GROUPS]
+    for entry in items:
+        entry["group"] = _plan_group(entry)
+    items.sort(key=lambda e: order.index(e["group"]))  # stable: the LLM's order within a section
+    return {"extruder": position, "items": items}
 
 
 @tool("slice_and_save",

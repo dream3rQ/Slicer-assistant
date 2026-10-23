@@ -54,13 +54,16 @@
     <label>Папка результатов<input id="cfgResults" placeholder="по умолчанию Документы/STE AI Assistant/results"></label>
     <label class="check"><input id="cfgSsl" type="checkbox"> Проверять SSL-сертификат</label>
     <label class="check"><input id="cfgCompact" type="checkbox"> Экономить токены (сокращать старую историю)</label>
+    <label class="check"><input id="cfgConfirm" type="checkbox"> Показывать изменения перед применением</label>
+    <label class="check"><input id="cfgPopups" type="checkbox"> Дублировать карточку и уведомления в окне слайсера</label>
     <label class="check"><input id="cfgDev" type="checkbox"> Режим разработчика (консоль)</label>
     <h3>Голосовой ввод</h3>
     <div class="inline">
       <label>Распознавание речи
         <select id="cfgVoice">
-          <option value="auto">Авто: через шлюз LLM, при ошибке — браузер</option>
-          <option value="server">Только через шлюз LLM</option>
+          <option value="auto">Авто: запись в плагине, при ошибке — в браузере</option>
+          <option value="plugin">Запись в плагине (Windows) → шлюз LLM</option>
+          <option value="server">Запись в браузере → шлюз LLM</option>
           <option value="browser">Только браузер (Chrome / Edge)</option>
         </select>
       </label>

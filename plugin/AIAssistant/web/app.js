@@ -5,6 +5,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var chat = $("chat"), input = $("input"), chips = $("chips");
   var lastSeq = 0, sessionId = null, busy = false, pending = [], toolNodes = {}, progressNode = null, thinkingNode = null;
+  var proposals = {}, openProposal = null;
 
   function api(method, path, body) {
     return fetch(path, { method: method, headers: H, body: body ? JSON.stringify(body) : undefined })
@@ -104,6 +105,114 @@
     return u;
   }
 
+  // ---------- plan card: apply_plan waits on the server until one of these answers
+  // POST /api/proposal {id, action: apply|revise|reject, overrides: {item id: value}, skip: [item id], text}
+  function fmt(it, v) {
+    if (v == null || v === "") return "—";
+    var o = (it.options || []).filter(function (x) { return String(x.value) === String(v); })[0];
+    if (o) return o.label;
+    if (v === true) return "да";
+    if (v === false) return "нет";
+    return String(v) + (it.unit ? " " + it.unit : "");
+  }
+  function editor(it) {
+    var c;
+    if (it.options) {
+      c = el("select");
+      it.options.forEach(function (o) { var op = el("option"); op.value = o.value; op.textContent = o.label; c.appendChild(op); });
+      c.value = it.proposed;
+    } else if (it.type === "bool") {
+      c = el("input"); c.type = "checkbox"; c.checked = !!it.proposed;
+    } else {
+      c = el("input"); c.value = it.proposed == null ? "" : it.proposed;
+      if (it.type === "int" || it.type === "float") {
+        c.type = "number"; c.step = it.type === "int" ? "1" : "any";
+        if (it.minimum != null) c.min = it.minimum;
+        if (it.maximum != null) c.max = it.maximum;
+      }
+    }
+    c.classList.add("edit");
+    return c;
+  }
+  function editedValue(it, c) {
+    if (c.type === "checkbox") return c.checked;
+    if (it.type === "int") return parseInt(c.value, 10);
+    if (it.type === "float") return parseFloat(String(c.value).replace(",", "."));
+    return c.value;
+  }
+
+  function proposalNode(d) {
+    var card = el("div", "proposal"), rows = [];
+    card.appendChild(el("div", "ph", "<b>Ассистент предлагает изменения</b><span>Примените, поправьте значения или уточните задачу</span>"));
+    var list = el("div", "items");
+    d.items.forEach(function (it) {
+      var row = el("div", "item" + (it.unchanged ? " same" : "") + (it.error ? " bad" : ""));
+      var use = el("input"); use.type = "checkbox"; use.checked = true; use.className = "use"; use.title = "Применять этот пункт";
+      var name = el("label", "name"); name.appendChild(use); name.appendChild(document.createTextNode(it.label));
+      if (it.key && it.key !== it.label) name.appendChild(el("code", null, esc(it.key)));
+      var vals = el("div", "vals", "<span class='cur'>" + esc(fmt(it, it.current)) + "</span><span class='arrow'>→</span>" +
+        "<span class='new'>" + esc(fmt(it, it.proposed)) + (it.unchanged ? " <i>(без изменений)</i>" : "") + "</span>");
+      var ctl = editor(it);
+      vals.appendChild(ctl);
+      row.appendChild(name); row.appendChild(vals);
+      if (it.reason) row.appendChild(el("div", "why", inline(it.reason)));
+      if (it.error || it.warning) row.appendChild(el("div", "warn", esc(it.error || it.warning)));
+      list.appendChild(row);
+      rows.push({ it: it, use: use, ctl: ctl, row: row });
+    });
+    card.appendChild(list);
+    var actions = el("div", "actions");
+    function btn(text, cls, fn) { var b = el("button", cls, esc(text)); b.type = "button"; b.onclick = fn; actions.appendChild(b); return b; }
+    var ask = el("div", "ask"), askText = el("textarea"), askSend = el("button", "primary", "Отправить");
+    askText.rows = 2; askText.placeholder = "Вопрос или что поменять: «почему не PETG?», «стенок сделай 8»"; askSend.type = "button";
+    ask.appendChild(askText); ask.appendChild(askSend); ask.hidden = true;
+
+    function answer(body) {
+      body.id = d.id;
+      card.classList.add("sending");
+      return api("POST", "/api/proposal", body).catch(function (e) { card.classList.remove("sending"); add(el("div", "msg error", esc(e.message))); });
+    }
+    btn("Применить", "primary", function () {
+      var overrides = {}, skip = [], editing = card.classList.contains("editing");
+      rows.forEach(function (r) {
+        if (editing && !r.use.checked) { skip.push(r.it.id); return; }
+        if (editing) {
+          var v = editedValue(r.it, r.ctl);
+          if (String(v) !== String(r.it.proposed)) overrides[r.it.id] = v;
+        }
+      });
+      answer({ action: "apply", overrides: overrides, skip: skip });
+    });
+    btn("Изменить", "ghost", function () { card.classList.toggle("editing"); this.textContent = card.classList.contains("editing") ? "Как предложено" : "Изменить"; });
+    btn("Уточнить", "ghost", function () { ask.hidden = !ask.hidden; if (!ask.hidden) askText.focus(); });
+    btn("Отклонить", "ghost", function () { answer({ action: "reject", text: askText.value.trim() }); });
+    askSend.onclick = function () { var t = askText.value.trim(); if (t) answer({ action: "revise", text: t }); else askText.focus(); };
+    askText.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askSend.onclick(); } });
+    card.appendChild(actions); card.appendChild(ask);
+    card.appendChild(el("div", "done"));
+    card.rows = rows;
+    return card;
+  }
+  function closeProposal(d) {
+    var card = proposals[d.id];
+    if (openProposal === d.id) openProposal = null;
+    if (!card) return;
+    card.classList.remove("sending", "editing"); card.classList.add("closed");
+    var changed = Object.keys(d.overrides || {}).length, skipped = (d.skip || []).length;
+    if (d.action === "apply") (card.rows || []).forEach(function (r) {
+      // Show what was applied, not what was proposed.
+      var n = r.row.querySelector(".new");
+      if ((d.skip || []).indexOf(r.it.id) >= 0) { r.row.classList.add("skipped"); n.textContent = "не применено"; }
+      else if (r.it.id in (d.overrides || {})) { r.row.classList.add("edited"); n.textContent = fmt(r.it, d.overrides[r.it.id]) + " (ваше значение)"; }
+    });
+    card.querySelector(".done").textContent = {
+      apply: changed || skipped ? "Применено с вашими правками" + (changed ? ": изменено " + changed : "") + (skipped ? ", пропущено " + skipped : "") : "Применено",
+      revise: "Отправлено на уточнение" + (d.text ? ": «" + d.text + "»" : ""),
+      reject: "Отклонено" + (d.text ? ": «" + d.text + "»" : ""),
+      cancel: "Остановлено, не применено"
+    }[d.action] || d.action;
+  }
+
   function render(ev) {
     var d = ev.data || {};
     if (ev.type !== "thinking") stopThinking();
@@ -145,13 +254,17 @@
         add(el("div", "msg note", esc(d.text))); break;
       case "usage":
         add(usageNode(d)); break;
+      case "proposal":
+        proposals[d.id] = add(proposalNode(d)); openProposal = d.id; setBusy(busy); break;
+      case "proposal_closed":
+        closeProposal(d); setBusy(busy); break;
     }
   }
 
   // ---------- polling
   function poll() {
     api("GET", "/api/events?after=" + lastSeq).then(function (res) {
-      if (sessionId && res.session !== sessionId) { chat.innerHTML = ""; lastSeq = 0; toolNodes = {}; }
+      if (sessionId && res.session !== sessionId) { chat.innerHTML = ""; lastSeq = 0; toolNodes = {}; proposals = {}; openProposal = null; }
       sessionId = res.session;
       res.events.forEach(function (ev) { if (ev.seq > lastSeq) { render(ev); lastSeq = ev.seq; } });
       setBusy(res.busy);
@@ -163,7 +276,8 @@
   function setBusy(b) {
     busy = b;
     $("statusDot").classList.toggle("busy", b);
-    $("btnSend").hidden = b; $("btnStop").hidden = !b;
+    // While the plan card waits, a typed message goes to it as "Уточнить" (see Session.post_user_message).
+    $("btnSend").hidden = b && !openProposal; $("btnStop").hidden = !b;
   }
 
   // ---------- attachments
@@ -203,22 +317,27 @@
   $("composer").addEventListener("submit", function (e) { e.preventDefault(); send(); });
   input.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
   $("btnStop").onclick = function () { api("POST", "/api/cancel"); };
-  $("btnNew").onclick = function () { api("POST", "/api/reset").then(function () { chat.innerHTML = ""; lastSeq = 0; toolNodes = {}; }); };
+  $("btnNew").onclick = function () { api("POST", "/api/reset").then(function () { chat.innerHTML = ""; lastSeq = 0; toolNodes = {}; proposals = {}; openProposal = null; }); };
 
   // ---------- voice input
+  // "plugin": the plugin records the microphone itself (Windows, voice.py) and
+  // transcribes through the gateway; no browser permission needed.
   // "server": record with MediaRecorder, the plugin sends it to the gateway's
   // /audio/transcriptions (any browser, key stays in the plugin).
   // "browser": Web Speech API (Chrome/Edge only, free, live text, needs internet).
   var mic = $("btnMic"), micTimer = $("micTimer");
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   var canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-  var voice = { engine: "auto", autosend: false };
-  var serverFailed = false, rec = null, timerId = null, startedAt = 0, baseText = "", MAX_SEC = 120;
+  var voice = { engine: "auto", autosend: false, native: false };
+  var pluginFailed = false, serverFailed = false, rec = null, timerId = null, startedAt = 0, baseText = "", MAX_SEC = 120;
 
   function engineNow() {
     if (voice.engine === "browser") return SR ? "browser" : null;
+    if (voice.engine === "plugin") return voice.native ? "plugin" : null;
     if (voice.engine === "server") return canRecord ? "server" : null;
-    if (canRecord && !(serverFailed && SR)) return "server";
+    if (serverFailed && SR) return "browser";
+    if (voice.native && !pluginFailed) return "plugin";
+    if (canRecord) return "server";
     return SR ? "browser" : null;
   }
   function micState(state) {
@@ -239,6 +358,38 @@
     if (voice.autosend && text && !busy) send();
   }
   function micError(msg) { add(el("div", "msg error", esc(msg))); }
+  function transcribed(r) {
+    micState("");
+    if (r.text) putText(r.text, true);
+    else micError("Речь не распознана. Попробуйте ещё раз, ближе к микрофону.");
+  }
+  function transcribeFailed(e) {
+    micState("");
+    if (voice.engine === "auto" && SR) {
+      serverFailed = true;
+      micError(e.message + " Дальше распознаю речь средствами браузера: нажмите микрофон и повторите.");
+    } else micError(e.message);
+  }
+
+  function startPlugin() {
+    micState("wait");
+    api("POST", "/api/voice/start").then(function () {
+      baseText = input.value.trim();
+      rec = { stop: function (cancel) {
+        rec = null;
+        if (cancel) { micState(""); api("POST", "/api/voice/cancel").catch(function () {}); return; }
+        micState("wait");
+        api("POST", "/api/voice/stop").then(transcribed).catch(transcribeFailed);
+      } };
+      micState("rec");
+    }).catch(function (e) {
+      micState("");
+      if (voice.engine === "auto" && (canRecord || SR)) {
+        pluginFailed = true;
+        micError(e.message + " Попробую записать через браузер: нажмите микрофон ещё раз.");
+      } else micError(e.message);
+    });
+  }
 
   function startServer() {
     micState("wait");
@@ -257,17 +408,8 @@
         var blob = new Blob(chunks, { type: mr.mimeType || type || "audio/webm" });
         var reader = new FileReader();
         reader.onload = function () {
-          api("POST", "/api/transcribe", { data: String(reader.result).split(",")[1] || "", mime: blob.type }).then(function (r) {
-            micState("");
-            if (r.text) putText(r.text, true);
-            else micError("Речь не распознана. Попробуйте ещё раз, ближе к микрофону.");
-          }).catch(function (e) {
-            micState("");
-            if (voice.engine === "auto" && SR) {
-              serverFailed = true;
-              micError(e.message + " Дальше распознаю речь средствами браузера: нажмите микрофон и повторите.");
-            } else micError(e.message);
-          });
+          api("POST", "/api/transcribe", { data: String(reader.result).split(",")[1] || "", mime: blob.type })
+            .then(transcribed).catch(transcribeFailed);
         };
         reader.readAsDataURL(blob);
       };
@@ -324,11 +466,12 @@
     var engine = engineNow();
     if (!engine) {
       micError(voice.engine === "browser"
-        ? "Этот браузер не умеет распознавать речь сам. Откройте чат в Chrome или Edge либо выберите в настройках распознавание через шлюз LLM."
+        ? "Этот браузер не умеет распознавать речь сам. Откройте чат в Chrome или Edge либо выберите в настройках другой способ."
+        : voice.engine === "plugin" ? "Запись в плагине работает только на Windows. Выберите в настройках запись в браузере."
         : "Этот браузер не умеет записывать звук. Откройте чат в Chrome, Edge или Firefox.");
       return;
     }
-    if (engine === "server") startServer(); else startBrowser();
+    if (engine === "plugin") startPlugin(); else if (engine === "server") startServer(); else startBrowser();
   };
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && rec) { e.preventDefault(); rec.stop(true); } });
 
@@ -340,9 +483,10 @@
       $("cfgUrl").value = c.llm_url || ""; $("cfgModel").value = c.llm_model || "";
       $("cfgKey").value = ""; $("cfgKey").placeholder = c.has_key ? ("сохранён: " + c.key_masked + " — оставьте пустым, чтобы не менять") : "введите ключ";
       $("cfgTemp").value = c.temperature; $("cfgSteps").value = c.max_steps; $("cfgResults").value = c.results_dir || "";
-      $("cfgSsl").checked = !!c.ssl_verify; $("cfgDev").checked = !!c.dev_mode; $("cfgCompact").checked = c.compact_history !== false; $("devConsole").hidden = !c.dev_mode;
+      $("cfgSsl").checked = !!c.ssl_verify; $("cfgDev").checked = !!c.dev_mode; $("cfgCompact").checked = c.compact_history !== false; $("cfgConfirm").checked = c.confirm_plan !== false; $("cfgPopups").checked = c.slicer_popups !== false; $("devConsole").hidden = !c.dev_mode;
       $("cfgVoice").value = c.voice_engine || "auto"; $("cfgVoiceModel").value = c.voice_model || ""; $("cfgVoiceSend").checked = !!c.voice_autosend;
-      voice.engine = c.voice_engine || "auto"; voice.autosend = !!c.voice_autosend; serverFailed = false;
+      voice.engine = c.voice_engine || "auto"; voice.autosend = !!c.voice_autosend; voice.native = !!c.voice_native;
+      pluginFailed = serverFailed = false;
       return c;
     });
   }
@@ -351,7 +495,7 @@
       llm_url: $("cfgUrl").value.trim(), llm_key: $("cfgKey").value.trim(), llm_model: $("cfgModel").value.trim(),
       temperature: parseFloat($("cfgTemp").value || "0.2"), max_steps: parseInt($("cfgSteps").value || "30", 10),
       results_dir: $("cfgResults").value.trim(), ssl_verify: $("cfgSsl").checked, dev_mode: $("cfgDev").checked,
-      compact_history: $("cfgCompact").checked,
+      compact_history: $("cfgCompact").checked, confirm_plan: $("cfgConfirm").checked, slicer_popups: $("cfgPopups").checked,
       voice_engine: $("cfgVoice").value, voice_model: $("cfgVoiceModel").value.trim(), voice_autosend: $("cfgVoiceSend").checked
     }).then(function () { status("Сохранено", "ok"); return loadConfig(); }).catch(function (e) { status(e.message, "err"); });
   }
