@@ -6,6 +6,7 @@
 import base64
 import json
 import os
+import re
 import ssl
 import threading
 import traceback
@@ -40,10 +41,10 @@ VOICE_DEFAULTS = OrderedDict([
 VOICE_ENGINES = ("auto", "server", "browser")
 MAX_AUDIO = 20 * 1024 * 1024
 # Vocabulary hint for the speech model, so print terms come out spelled right.
-TRANSCRIBE_PROMPT = ("Разговор о 3D-печати в STE Slicer. Режимы 3D, 5D, 5D Spiral. Материалы Stereotech: "
-                     "Proto PLA, Enduse PETG, Enduse ABS, Enduse PC, Fiberpart PA12, Fiberpart PC G20, "
-                     "Sealant TPU, Sealant TPV, Metalcast, ContiFiber. Сопло, экструдер, стол, поддержки, заполнение, высота слоя, "
-                     "кайма, юбка, ретракт, обдув, STL, G-code, мм, °C.")
+# Kept to one short sentence: on short recordings the model sometimes echoes
+# the prompt into the text (see _strip_prompt_echo).
+TRANSCRIBE_PROMPT = ("STE Slicer, 3D-печать: Proto PLA, Enduse PETG, Fiberpart PA12, Sealant TPU, режимы 5D и "
+                     "5D Spiral, высота слоя, поддержки, кайма, ретракт.")
 
 
 class ChatServer(ThreadingMixIn, HTTPServer):
@@ -337,7 +338,27 @@ def _transcribe(server, payload):
         text = json.loads(raw).get("text", "")
     except (ValueError, AttributeError):
         text = raw  # response_format=text on some gateways
-    return {"text": (text or "").strip(), "model": model}
+    return {"text": _strip_prompt_echo(text or ""), "model": model}
+
+
+def _words(text):
+    return re.findall(r"[\w°]+", text.lower())
+
+
+def _strip_prompt_echo(text):
+    """Drops sentences that are the prompt repeated back rather than speech:
+    contained in it, or made almost only of its words."""
+    prompt_flat = " ".join(_words(TRANSCRIBE_PROMPT))
+    prompt_words = set(_words(TRANSCRIBE_PROMPT))
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        words = _words(sentence)
+        if words and len(" ".join(words)) >= 12 and " ".join(words) in prompt_flat:
+            continue
+        if len(words) >= 5 and sum(w in prompt_words for w in words) >= 0.8 * len(words):
+            continue
+        kept.append(sentence)
+    return " ".join(kept).strip()
 
 
 def _dump_settings():
