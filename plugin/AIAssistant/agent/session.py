@@ -19,6 +19,8 @@ from .prompt import build_system_prompt
 MODEL_EXT = (".stl", ".obj", ".3mf")
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
 DOC_EXT = (".docx", ".txt", ".md")
+# fn(session, event) called on every event, from whatever thread emitted it (slicer_ui.py).
+LISTENERS = []
 MAX_TOOL_RESULT_CHARS = 12000      # hard cap, always
 COMPACT_TOOL_RESULT_CHARS = 4000   # cap when compact_history is on
 
@@ -52,6 +54,11 @@ class Session:
         with self.lock:
             event = {"seq": len(self.events) + 1, "type": kind, "time": time.time(), "data": data}
             self.events.append(event)
+        for listener in LISTENERS:
+            try:
+                listener(self, event)
+            except Exception:
+                Logger.logException("w", "AI Assistant event listener failed")
         return event
 
     def events_after(self, seq):

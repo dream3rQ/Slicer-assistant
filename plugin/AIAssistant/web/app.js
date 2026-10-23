@@ -454,7 +454,7 @@
       $("cfgUrl").value = c.llm_url || ""; $("cfgModel").value = c.llm_model || "";
       $("cfgKey").value = ""; $("cfgKey").placeholder = c.has_key ? ("сохранён: " + c.key_masked + " — оставьте пустым, чтобы не менять") : "введите ключ";
       $("cfgTemp").value = c.temperature; $("cfgSteps").value = c.max_steps; $("cfgResults").value = c.results_dir || "";
-      $("cfgSsl").checked = !!c.ssl_verify; $("cfgDev").checked = !!c.dev_mode; $("cfgCompact").checked = c.compact_history !== false; $("cfgConfirm").checked = c.confirm_plan !== false; $("devConsole").hidden = !c.dev_mode;
+      $("cfgSsl").checked = !!c.ssl_verify; $("cfgDev").checked = !!c.dev_mode; $("cfgCompact").checked = c.compact_history !== false; $("cfgConfirm").checked = c.confirm_plan !== false; $("cfgPopups").checked = c.slicer_popups !== false; $("devConsole").hidden = !c.dev_mode;
       $("cfgVoice").value = c.voice_engine || "auto"; $("cfgVoiceModel").value = c.voice_model || ""; $("cfgVoiceSend").checked = !!c.voice_autosend;
       voice.engine = c.voice_engine || "auto"; voice.autosend = !!c.voice_autosend; serverFailed = false;
       return c;
@@ -465,7 +465,7 @@
       llm_url: $("cfgUrl").value.trim(), llm_key: $("cfgKey").value.trim(), llm_model: $("cfgModel").value.trim(),
       temperature: parseFloat($("cfgTemp").value || "0.2"), max_steps: parseInt($("cfgSteps").value || "30", 10),
       results_dir: $("cfgResults").value.trim(), ssl_verify: $("cfgSsl").checked, dev_mode: $("cfgDev").checked,
-      compact_history: $("cfgCompact").checked, confirm_plan: $("cfgConfirm").checked,
+      compact_history: $("cfgCompact").checked, confirm_plan: $("cfgConfirm").checked, slicer_popups: $("cfgPopups").checked,
       voice_engine: $("cfgVoice").value, voice_model: $("cfgVoiceModel").value.trim(), voice_autosend: $("cfgVoiceSend").checked
     }).then(function () { status("Сохранено", "ok"); return loadConfig(); }).catch(function (e) { status(e.message, "err"); });
   }

@@ -6,6 +6,7 @@ from UM.Logger import Logger
 
 from .agent import config
 from .server import ChatServer
+from .slicer_ui import SlicerUI
 
 PREFERRED_PORT = 8765
 
@@ -16,6 +17,7 @@ class AIAssistant(Extension):
         self._server = None
         self._lock = threading.Lock()
         config.init()
+        self._ui = SlicerUI(self)
         self.setMenuName("AI Assistant")
         self.addMenuItem("Open chat", self.showChat)
         self.addMenuItem("New conversation", self.newConversation)
@@ -33,6 +35,9 @@ class AIAssistant(Extension):
                 thread.start()
                 Logger.log("i", "AI Assistant chat server on http://127.0.0.1:%d/", self._server.server_port)
             return self._server
+
+    def server(self):
+        return self._server
 
     def url(self):
         return "http://127.0.0.1:%d/" % self._ensure_server().server_port
