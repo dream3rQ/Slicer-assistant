@@ -1142,6 +1142,37 @@ def _tr(context, text):
     return text
 
 
+# Plan card sections, in display order: Cura setting category -> section.
+PLAN_GROUPS = [
+    ("Режим, материал и профиль", ()),
+    ("Геометрия и прочность", ("printing_mode_category", "reinforcement", "resolution", "shell", "infill")),
+    ("Температура и скорость", ("material", "speed", "travel", "cooling")),
+    ("Адгезия и поддержки", ("support", "platform_adhesion")),
+    ("Прочее", ()),
+]
+
+
+def _category(key):
+    try:
+        found = _global_stack().definition.findDefinitions(key=key)
+        node = found[0] if found else None
+        while node is not None and node.parent is not None:
+            node = node.parent
+        return node.key if node is not None else None
+    except Exception:
+        return None
+
+
+def _plan_group(item):
+    if item["kind"] != "setting":
+        return PLAN_GROUPS[0][0]
+    category = _category(item.get("key") or "")
+    for name, categories in PLAN_GROUPS:
+        if category in categories:
+            return name
+    return PLAN_GROUPS[-1][0]
+
+
 @tool("preview_plan",
       "Что изменит apply_plan: текущие и предлагаемые значения, варианты и предупреждения, без применения.",
       TOOLS["apply_plan"]["inputSchema"]["properties"], for_llm=False)
@@ -1205,6 +1236,10 @@ def preview_plan(ctx, mode=None, material_id=None, quality_type=None, settings=N
                 entry["warning"] = warning
         except ToolError as e:
             entry["error"] = str(e)
+    order = [name for name, _ in PLAN_GROUPS]
+    for entry in items:
+        entry["group"] = _plan_group(entry)
+    items.sort(key=lambda e: order.index(e["group"]))  # stable: the LLM's order within a section
     return {"extruder": position, "items": items}
 
 

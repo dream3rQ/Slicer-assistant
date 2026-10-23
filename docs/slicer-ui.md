@@ -1,28 +1,44 @@
 # Интерфейс внутри слайсера
 
-Кейс требует окно чат-бота в интерфейсе программы, поэтому основной интерфейс теперь живёт в окнах STE Slicer (QML).
-Веб-страница осталась запасным вариантом: «AI Assistant → Open chat in browser». Это тот же диалог, оба окна
-можно держать открытыми одновременно.
+Кейс требует окно чат-бота в интерфейсе программы, поэтому интерфейс встроен прямо в главное окно STE Slicer (QML),
+по макетам дизайнеров. Веб-страница осталась запасным вариантом: «AI Assistant → Open chat in browser».
+Это тот же диалог, оба интерфейса можно держать открытыми одновременно.
 
 | Файл | Что это | Python-сторона |
 |---|---|---|
-| `plugin/AIAssistant/qml/ChatWindow.qml` | Окно чата: сообщения, вызовы инструментов, вложения, голос, настройки | `slicer_chat.py` (`manager`) |
-| `plugin/AIAssistant/qml/PlanCard.qml` | Карточка изменений перед применением плана | `slicer_ui.py` (`manager`) |
-| Уведомления слайсера | «Ассистент закончил», «Ошибка», с кнопкой «Открыть чат» | `slicer_ui.py`, штатный `UM.Message` |
+| `qml/AgentButton.qml` | Кнопка «AI» в верхней панели, слева от кнопок ориентации вида. Открывает и закрывает панель | `slicer_chat.py` |
+| `qml/AgentPanel.qml` | Панель «Stereo Agent» справа под верхней панелью: пустой экран с быстрыми запросами, сообщения, вложения (перетаскиванием или «+»), режим 3D/5D, микрофон, настройки в меню ⋯ | `slicer_chat.py` (`manager`) |
+| `qml/PlanCard.qml` | Карточка «Предлагаемые изменения» слева от панели: разделы, рекомендация, поле «ваше значение», пояснения по «?» | `slicer_ui.py` (`manager`) |
+| `qml/IconButton.qml`, `RoundButton.qml`, `ModeChip.qml`, `QuickGroup.qml` | Мелкие элементы панели | — |
+| Уведомления слайсера | «Ассистент закончил», «Ошибка» с кнопкой «Открыть чат». Показываются, только когда панель закрыта | `slicer_ui.py`, штатный `UM.Message` |
 
-Слайсер построен на Qt 5.10, поэтому используются QtQuick 2.2 и QtQuick.Controls 1.4.
-Controls 2 и синтаксис Qt 5.15 (`function onFoo()` в `Connections`) недоступны.
+## Как элементы попадают в окно
 
-## Контракт окна чата (`manager` в ChatWindow.qml)
+`slicer_ui.mount()` после загрузки главного QML (`engineCreatedSignal`) находит элемент верхней панели
+(класс `Topbar…`) и создаёт наш QML как его соседа (`setParentItem(topbar.parentItem())`).
+Кнопка «AI» создаётся внутри самой верхней панели и ставится слева от ряда кнопок ориентации (ряд высотой 30).
+Так панель и карточка лежат поверх сцены, а не в отдельных окнах, которые теряются за главным окном.
+Если верхняя панель не найдена, «Open chat» открывает веб-страницу.
+
+Слайсер построен на Qt 5.10, поэтому используются QtQuick 2.7 и QtQuick.Controls 1.4.
+Controls 2 и синтаксис Qt 5.15 (`function onFoo()` в `Connections`) недоступны. Значок микрофона
+нарисован на Canvas, потому что эмодзи в шрифтах слайсера может не быть.
+
+## Контракт панели (`manager` в AgentPanel.qml)
 
 - Сигналы: `eventAdded(json)` — одно событие сессии; `cleared()` — новый диалог; `voiceText(text)` — распознанная речь;
   `configTested(ok, text)`.
 - Свойства: `busy`, `attachmentsJson`, `voiceAvailable`, `voiceState` (`""`, `"recording"`, `"transcribing"`).
-- Действия: `send(text)`, `addFiles(urls)`, `removeAttachment(id)`, `cancel()`, `newConversation()`, `showCard()`,
-  `openInBrowser()`, `toggleVoice()`, `cancelVoice()`, `configJson()`, `saveConfig(json)`, `testConnection()`.
+- Действия: `send(text, mode)`, `addFiles(urls)`, `removeAttachment(id)`, `cancel()`, `newConversation()`, `showCard()`,
+  `openInBrowser()`, `toggleVoice()`, `cancelVoice()`, `configJson()`, `saveConfig(json)`, `testConnection()`, `hide()`, `toggle()`.
+
+Режим 3D/5D уходит в модель отдельной подсказкой (`hint`), в пузыре пользователя видна только метка «режим 5D».
+Открыта ли панель, запоминается в настройках (`panel_open`).
 
 События те же, что получает веб-страница. Python заранее готовит для QML поля `html` (у ответа ассистента),
 `summary` и `details` (у результата инструмента), `args` (у вызова инструмента) и `line` (у расхода токенов).
 
 Контракт карточки описан в [plan-card.md](plan-card.md). В QML это `manager.proposalJson`,
-`manager.answer(action, overridesJson, skipJson, text)` и `manager.openChat()`.
+`manager.answer(action, overridesJson, skipJson, text)` и `manager.openChat()`. Пункты плана приходят
+с полем `group` и отсортированы по разделам: «Режим, материал и профиль», «Геометрия и прочность»,
+«Температура и скорость», «Адгезия и поддержки», «Прочее».

@@ -1,6 +1,7 @@
 import threading
 import webbrowser
 
+from UM.Application import Application
 from UM.Extension import Extension
 from UM.Logger import Logger
 
@@ -24,6 +25,7 @@ class AIAssistant(Extension):
         self.addMenuItem("Open chat", self.showChat)
         self.addMenuItem("Open chat in browser", self.showChatInBrowser)
         self.addMenuItem("New conversation", self.newConversation)
+        Application.getInstance().engineCreatedSignal.connect(self._chat.mountUi)
 
     def ensureServer(self):
         with self._lock:
@@ -41,6 +43,12 @@ class AIAssistant(Extension):
 
     def server(self):
         return self._server
+
+    def panelVisible(self):
+        return self._chat.isVisible()
+
+    def panelItem(self):
+        return self._chat.item()
 
     def url(self):
         return "http://127.0.0.1:%d/" % self.ensureServer().server_port

@@ -96,7 +96,8 @@ class Session:
         return {k: v for k, v in item.items() if k not in ("data_url", "path", "text")}
 
     # ---- conversation
-    def post_user_message(self, text, attachment_ids):
+    def post_user_message(self, text, attachment_ids, hint=None):
+        """hint: extra words for the LLM only, e.g. the 3D/5D chip from the slicer panel."""
         with self.lock:
             if self.proposal is not None and text:
                 # Typing while the plan card is open = "Уточнить" with that text.
@@ -108,9 +109,9 @@ class Session:
             self.busy = True
             self.cancel_requested = False
         attachments = [self.uploads[a] for a in attachment_ids or [] if a in self.uploads]
-        self.emit("user", {"text": text, "attachments": [
+        self.emit("user", {"text": text, "hint": hint, "attachments": [
             {"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in attachments]})
-        self.messages.append({"role": "user", "content": _user_content(text, attachments)})
+        self.messages.append({"role": "user", "content": _user_content(text + ("\n" + hint if hint else ""), attachments)})
         thread = threading.Thread(target=self._run, name="ste-ai-agent", daemon=True)
         thread.start()
 

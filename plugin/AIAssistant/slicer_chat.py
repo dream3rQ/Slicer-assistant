@@ -1,6 +1,7 @@
-# The chat as a window inside the slicer (qml/ChatWindow.qml). It is a second
-# face of the same Session the browser page talks to: messages, attachments,
-# settings and the event log are shared, so either UI can be used at any time.
+# The Stereo Agent panel inside the slicer window (qml/AgentPanel.qml) and its
+# toggle button in the top bar (qml/AgentButton.qml). It is a second face of the
+# same Session the browser page talks to: messages, attachments, settings and
+# the event log are shared, so either UI can be used at any time.
 import base64
 import html
 import json
@@ -10,13 +11,14 @@ import threading
 
 from PyQt5.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 
-from UM.Application import Application
-from UM.Logger import Logger
-
 from . import voice
 from .agent import config, llm, session as session_module
+from .slicer_ui import mount
 
-QML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qml", "ChatWindow.qml")
+# The 3D / 5D chips under the input: an explicit choice the agent must follow (see prompt.py).
+# The hint goes to the LLM only; the chat shows the chip.
+MODE_HINTS = {"3D": "Режим печати: 3D (classic), выбран пользователем.",
+              "5D": "Режим печати: 5D, выбран пользователем; Spiral или полный 5D выбери по детали."}
 
 
 class SlicerChat(QObject):
@@ -34,7 +36,8 @@ class SlicerChat(QObject):
         super().__init__(parent)
         self._extension = extension
         self._card = card
-        self._window = None
+        self._panel = None
+        self._button = None
         self._session = None
         self._busy = False
         self._attachments = []
@@ -43,19 +46,46 @@ class SlicerChat(QObject):
         self._done.connect(self._onDone)
         session_module.LISTENERS.append(self._event.emit)
 
+    def mountUi(self):
+        """Called once the slicer's main window exists: the top bar button, and
+        the panel itself if it was open when the slicer was closed."""
+        if self._button is None:
+            self._button = mount("AgentButton", {"manager": self}, in_topbar=True)
+        if config.get("panel_open"):
+            self.show()
+
     def show(self):
         server = self._extension.ensureServer()
-        if self._window is None:
-            self._window = Application.getInstance().createQmlComponent(QML_PATH, {"manager": self})
-            if self._window is None:
-                Logger.log("e", "AI Assistant: could not create %s", QML_PATH)
+        if self._panel is None:
+            self._panel = mount("AgentPanel", {"manager": self})
+            if self._panel is None:
                 return False
+            if self._button is not None:
+                self._button.setProperty("panel", self._panel)
         if self._session is not server.session:
             self._replay(server.session)
-        self._window.show()
-        self._window.raise_()
-        self._window.requestActivate()
+        self._panel.setProperty("visible", True)
+        config.set_many({"panel_open": True})
         return True
+
+    def isVisible(self):
+        return self._panel is not None and bool(self._panel.property("visible"))
+
+    def item(self):
+        return self._panel
+
+    @pyqtSlot()
+    def hide(self):
+        if self._panel is not None:
+            self._panel.setProperty("visible", False)
+        config.set_many({"panel_open": False})
+
+    @pyqtSlot()
+    def toggle(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
 
     # ---- state for QML
     @pyqtProperty(bool, notify=busyChanged)
@@ -113,14 +143,15 @@ class SlicerChat(QObject):
         self._voice = state
         self.voiceChanged.emit()
 
-    @pyqtSlot(str)
-    def send(self, text):
+    @pyqtSlot(str, str)
+    def send(self, text, mode):
         session = self._extension.ensureServer().session
         text = (text or "").strip()
+
         if not text and not self._attachments:
             return
         try:
-            session.post_user_message(text, [a["id"] for a in self._attachments])
+            session.post_user_message(text, [a["id"] for a in self._attachments], MODE_HINTS.get(mode))
         except RuntimeError as e:
             self._local("error", str(e))
             return
