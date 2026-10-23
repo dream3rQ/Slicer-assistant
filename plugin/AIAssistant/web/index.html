@@ -61,8 +61,9 @@
     <div class="inline">
       <label>Распознавание речи
         <select id="cfgVoice">
-          <option value="auto">Авто: через шлюз LLM, при ошибке — браузер</option>
-          <option value="server">Только через шлюз LLM</option>
+          <option value="auto">Авто: запись в плагине, при ошибке — в браузере</option>
+          <option value="plugin">Запись в плагине (Windows) → шлюз LLM</option>
+          <option value="server">Запись в браузере → шлюз LLM</option>
           <option value="browser">Только браузер (Chrome / Edge)</option>
         </select>
       </label>

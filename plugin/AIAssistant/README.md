@@ -27,6 +27,17 @@
 - Результаты сохраняются в `Документы\STE AI Assistant\results\<деталь>\` (`project.3mf`, `result.gcode`).
   Папку можно поменять в настройках.
 
+## Голосовой ввод
+
+- Кнопка с микрофоном рядом с полем ввода: нажать и говорить, нажать ещё раз — текст появится в поле
+  (Esc — отмена). В настройках можно включить автоотправку.
+- На Windows звук записывает сам плагин (`voice.py`, winmm через ctypes), без разрешений браузера.
+  Речь распознаёт модель `…-transcribe` / whisper через тот же шлюз и ключ (`/audio/transcriptions`);
+  модель выбирается автоматически из списка шлюза или задаётся в настройках.
+- Запасные варианты: запись в браузере (MediaRecorder) и Web Speech API (Chrome/Edge).
+- API для любого окна чата: `POST /api/voice/start`, `/api/voice/stop` (→ `{text}`), `/api/voice/cancel`;
+  из Python — `voice.start()`, `voice.stop()` (WAV), `voice.transcribe(audio, mime)`, `voice.is_available()`.
+
 ## Архитектура
 
 ```

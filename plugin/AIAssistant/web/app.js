@@ -320,19 +320,24 @@
   $("btnNew").onclick = function () { api("POST", "/api/reset").then(function () { chat.innerHTML = ""; lastSeq = 0; toolNodes = {}; proposals = {}; openProposal = null; }); };
 
   // ---------- voice input
+  // "plugin": the plugin records the microphone itself (Windows, voice.py) and
+  // transcribes through the gateway; no browser permission needed.
   // "server": record with MediaRecorder, the plugin sends it to the gateway's
   // /audio/transcriptions (any browser, key stays in the plugin).
   // "browser": Web Speech API (Chrome/Edge only, free, live text, needs internet).
   var mic = $("btnMic"), micTimer = $("micTimer");
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   var canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-  var voice = { engine: "auto", autosend: false };
-  var serverFailed = false, rec = null, timerId = null, startedAt = 0, baseText = "", MAX_SEC = 120;
+  var voice = { engine: "auto", autosend: false, native: false };
+  var pluginFailed = false, serverFailed = false, rec = null, timerId = null, startedAt = 0, baseText = "", MAX_SEC = 120;
 
   function engineNow() {
     if (voice.engine === "browser") return SR ? "browser" : null;
+    if (voice.engine === "plugin") return voice.native ? "plugin" : null;
     if (voice.engine === "server") return canRecord ? "server" : null;
-    if (canRecord && !(serverFailed && SR)) return "server";
+    if (serverFailed && SR) return "browser";
+    if (voice.native && !pluginFailed) return "plugin";
+    if (canRecord) return "server";
     return SR ? "browser" : null;
   }
   function micState(state) {
@@ -353,6 +358,38 @@
     if (voice.autosend && text && !busy) send();
   }
   function micError(msg) { add(el("div", "msg error", esc(msg))); }
+  function transcribed(r) {
+    micState("");
+    if (r.text) putText(r.text, true);
+    else micError("Речь не распознана. Попробуйте ещё раз, ближе к микрофону.");
+  }
+  function transcribeFailed(e) {
+    micState("");
+    if (voice.engine === "auto" && SR) {
+      serverFailed = true;
+      micError(e.message + " Дальше распознаю речь средствами браузера: нажмите микрофон и повторите.");
+    } else micError(e.message);
+  }
+
+  function startPlugin() {
+    micState("wait");
+    api("POST", "/api/voice/start").then(function () {
+      baseText = input.value.trim();
+      rec = { stop: function (cancel) {
+        rec = null;
+        if (cancel) { micState(""); api("POST", "/api/voice/cancel").catch(function () {}); return; }
+        micState("wait");
+        api("POST", "/api/voice/stop").then(transcribed).catch(transcribeFailed);
+      } };
+      micState("rec");
+    }).catch(function (e) {
+      micState("");
+      if (voice.engine === "auto" && (canRecord || SR)) {
+        pluginFailed = true;
+        micError(e.message + " Попробую записать через браузер: нажмите микрофон ещё раз.");
+      } else micError(e.message);
+    });
+  }
 
   function startServer() {
     micState("wait");
@@ -371,17 +408,8 @@
         var blob = new Blob(chunks, { type: mr.mimeType || type || "audio/webm" });
         var reader = new FileReader();
         reader.onload = function () {
-          api("POST", "/api/transcribe", { data: String(reader.result).split(",")[1] || "", mime: blob.type }).then(function (r) {
-            micState("");
-            if (r.text) putText(r.text, true);
-            else micError("Речь не распознана. Попробуйте ещё раз, ближе к микрофону.");
-          }).catch(function (e) {
-            micState("");
-            if (voice.engine === "auto" && SR) {
-              serverFailed = true;
-              micError(e.message + " Дальше распознаю речь средствами браузера: нажмите микрофон и повторите.");
-            } else micError(e.message);
-          });
+          api("POST", "/api/transcribe", { data: String(reader.result).split(",")[1] || "", mime: blob.type })
+            .then(transcribed).catch(transcribeFailed);
         };
         reader.readAsDataURL(blob);
       };
@@ -438,11 +466,12 @@
     var engine = engineNow();
     if (!engine) {
       micError(voice.engine === "browser"
-        ? "Этот браузер не умеет распознавать речь сам. Откройте чат в Chrome или Edge либо выберите в настройках распознавание через шлюз LLM."
+        ? "Этот браузер не умеет распознавать речь сам. Откройте чат в Chrome или Edge либо выберите в настройках другой способ."
+        : voice.engine === "plugin" ? "Запись в плагине работает только на Windows. Выберите в настройках запись в браузере."
         : "Этот браузер не умеет записывать звук. Откройте чат в Chrome, Edge или Firefox.");
       return;
     }
-    if (engine === "server") startServer(); else startBrowser();
+    if (engine === "plugin") startPlugin(); else if (engine === "server") startServer(); else startBrowser();
   };
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && rec) { e.preventDefault(); rec.stop(true); } });
 
@@ -456,7 +485,8 @@
       $("cfgTemp").value = c.temperature; $("cfgSteps").value = c.max_steps; $("cfgResults").value = c.results_dir || "";
       $("cfgSsl").checked = !!c.ssl_verify; $("cfgDev").checked = !!c.dev_mode; $("cfgCompact").checked = c.compact_history !== false; $("cfgConfirm").checked = c.confirm_plan !== false; $("cfgPopups").checked = c.slicer_popups !== false; $("devConsole").hidden = !c.dev_mode;
       $("cfgVoice").value = c.voice_engine || "auto"; $("cfgVoiceModel").value = c.voice_model || ""; $("cfgVoiceSend").checked = !!c.voice_autosend;
-      voice.engine = c.voice_engine || "auto"; voice.autosend = !!c.voice_autosend; serverFailed = false;
+      voice.engine = c.voice_engine || "auto"; voice.autosend = !!c.voice_autosend; voice.native = !!c.voice_native;
+      pluginFailed = serverFailed = false;
       return c;
     });
   }
