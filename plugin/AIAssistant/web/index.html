@@ -18,7 +18,7 @@
 <main id="chat" class="chat" aria-live="polite">
   <div class="empty" id="empty">
     <h1>Опишите задачу печати</h1>
-    <p>Например: «Кронштейн под нагрузку, PETG, без поддержек». Приложите STL/OBJ/3MF, фото или ТЗ в .docx — ассистент сам подберёт режим, материал и настройки, нарежет модель и объяснит решения.</p>
+    <p>Например: «Кронштейн под нагрузку, PETG, без поддержек». Приложите STL/OBJ/3MF, фото или ТЗ в .docx — ассистент сам подберёт режим, материал и настройки, нарежет модель и объяснит решения. Задачу можно продиктовать: кнопка с микрофоном.</p>
   </div>
 </main>
 
@@ -29,7 +29,11 @@
       <input type="file" id="fileInput" multiple accept=".stl,.obj,.3mf,.png,.jpg,.jpeg,.webp,.docx,.txt,.md">
       <span>＋</span>
     </label>
-    <textarea id="input" rows="2" placeholder="Опишите деталь и требования… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+    <button type="button" id="btnMic" class="mic" title="Голосовой ввод: нажмите и говорите, нажмите ещё раз — готово (Esc — отмена)" aria-label="Голосовой ввод" aria-pressed="false">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-2.07A7 7 0 0 0 19 12h-2Z"/></svg>
+      <span class="timer" id="micTimer"></span>
+    </button>
+    <textarea id="input" rows="2" placeholder="Опишите деталь и требования или нажмите микрофон… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
     <button type="submit" id="btnSend" class="primary">Отправить</button>
     <button type="button" id="btnStop" class="danger" hidden>Стоп</button>
   </div>
@@ -51,6 +55,18 @@
     <label class="check"><input id="cfgSsl" type="checkbox"> Проверять SSL-сертификат</label>
     <label class="check"><input id="cfgCompact" type="checkbox"> Экономить токены (сокращать старую историю)</label>
     <label class="check"><input id="cfgDev" type="checkbox"> Режим разработчика (консоль)</label>
+    <h3>Голосовой ввод</h3>
+    <div class="inline">
+      <label>Распознавание речи
+        <select id="cfgVoice">
+          <option value="auto">Авто: через шлюз LLM, при ошибке — браузер</option>
+          <option value="server">Только через шлюз LLM</option>
+          <option value="browser">Только браузер (Chrome / Edge)</option>
+        </select>
+      </label>
+      <label>Модель распознавания<input id="cfgVoiceModel" placeholder="авто (…-transcribe / whisper)" autocomplete="off"></label>
+    </div>
+    <label class="check"><input id="cfgVoiceSend" type="checkbox"> Отправлять распознанный текст сразу</label>
     <p class="hint" id="cfgStatus"></p>
     <div class="buttons">
       <button type="button" id="btnTest" class="ghost">Проверить подключение</button>

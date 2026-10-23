@@ -69,6 +69,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer textarea { flex: 1; resize: vertical; min-height: 44px; max-height: 240px; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 .attach { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-size: 22px; color: var(--muted); }
 .attach input { display: none; }
+.mic { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 44px; height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--muted); }
+.mic:hover { color: var(--accent); border-color: var(--accent); }
+.mic .timer { font: 12px var(--mono); }
+.mic .timer:empty { display: none; }
+.mic.rec { background: var(--err); border-color: var(--err); color: #fff; animation: pulse 1.2s infinite; }
+.mic.wait { color: var(--accent); border-color: var(--accent); cursor: progress; }
+.mic.wait svg { animation: pulse .8s infinite; }
+.mic[hidden] { display: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: 12px var(--mono); background: var(--accent-soft); color: var(--accent); padding: 3px 8px; border-radius: 999px; display: inline-flex; gap: 6px; align-items: center; }
 .chip button { padding: 0 4px; background: none; border: 0; color: inherit; }
@@ -84,7 +92,7 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .settings h3 { margin: 8px 0 4px; font-size: 15px; }
 .settings label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .settings label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
-.settings input:not([type=checkbox]), .settings textarea { font: 14px var(--sans); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+.settings input:not([type=checkbox]), .settings textarea, .settings select { font: 14px var(--sans); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 .settings textarea { font-family: var(--mono); font-size: 13px; width: 100%; }
 .inline { display: flex; gap: 12px; }
 .inline label { flex: 1; }

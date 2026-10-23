@@ -7,6 +7,8 @@ from UM.Logger import Logger
 from .agent import config
 from .server import ChatServer
 
+PREFERRED_PORT = 8765
+
 
 class AIAssistant(Extension):
     def __init__(self):
@@ -21,7 +23,12 @@ class AIAssistant(Extension):
     def _ensure_server(self):
         with self._lock:
             if self._server is None:
-                self._server = ChatServer(("127.0.0.1", 0))  # the OS picks a free port
+                # A fixed port keeps the page's origin, so the browser remembers the
+                # microphone permission; if it is taken, the OS picks a free one.
+                try:
+                    self._server = ChatServer(("127.0.0.1", PREFERRED_PORT))
+                except OSError:
+                    self._server = ChatServer(("127.0.0.1", 0))
                 thread = threading.Thread(target=self._server.serve_forever, name="ste-ai-http", daemon=True)
                 thread.start()
                 Logger.log("i", "AI Assistant chat server on http://127.0.0.1:%d/", self._server.server_port)
