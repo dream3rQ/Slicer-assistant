@@ -17,6 +17,7 @@ DEFAULTS = OrderedDict([
     ("results_dir", ""),      # empty = ~/Documents/STE AI Assistant/results
     ("dev_mode", False),      # enables /api/debug/eval
     ("compact_history", True),  # shorten old tool results / drop resent images (see Session._request_messages)
+    ("confirm_plan", True),   # show apply_plan as a card and wait for "Применить" (see Session._confirm_plan)
 ])
 
 
@@ -75,6 +76,7 @@ def public():
         "results_dir": results_root(),
         "dev_mode": get("dev_mode"),
         "compact_history": get("compact_history"),
+        "confirm_plan": get("confirm_plan"),
     }
 
 

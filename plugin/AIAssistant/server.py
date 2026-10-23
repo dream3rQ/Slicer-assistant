@@ -62,6 +62,7 @@ class ChatServer(ThreadingMixIn, HTTPServer):
 
     def reset_session(self):
         with self.session_lock:
+            self.session.cancel()  # also releases a plan card the old session waits on
             self.session = Session()
         return self.session
 
@@ -176,6 +177,15 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": True})
             elif url.path == "/api/upload":
                 self._send_json(session.add_upload(payload.get("name"), payload.get("data") or ""))
+            elif url.path == "/api/proposal":
+                # The plan card's buttons: apply (with the user's edits), revise (text), reject.
+                try:
+                    session.answer_proposal(payload.get("id"), payload.get("action"), payload.get("overrides"),
+                                            payload.get("skip"), payload.get("text"))
+                except (RuntimeError, ValueError) as e:
+                    self._send_json({"error": str(e)}, 409)
+                    return
+                self._send_json({"ok": True})
             elif url.path == "/api/cancel":
                 session.cancel()
                 self._send_json({"ok": True})
