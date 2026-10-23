@@ -205,6 +205,133 @@
   $("btnStop").onclick = function () { api("POST", "/api/cancel"); };
   $("btnNew").onclick = function () { api("POST", "/api/reset").then(function () { chat.innerHTML = ""; lastSeq = 0; toolNodes = {}; }); };
 
+  // ---------- voice input
+  // "server": record with MediaRecorder, the plugin sends it to the gateway's
+  // /audio/transcriptions (any browser, key stays in the plugin).
+  // "browser": Web Speech API (Chrome/Edge only, free, live text, needs internet).
+  var mic = $("btnMic"), micTimer = $("micTimer");
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  var voice = { engine: "auto", autosend: false };
+  var serverFailed = false, rec = null, timerId = null, startedAt = 0, baseText = "", MAX_SEC = 120;
+
+  function engineNow() {
+    if (voice.engine === "browser") return SR ? "browser" : null;
+    if (voice.engine === "server") return canRecord ? "server" : null;
+    if (canRecord && !(serverFailed && SR)) return "server";
+    return SR ? "browser" : null;
+  }
+  function micState(state) {
+    mic.classList.toggle("rec", state === "rec"); mic.classList.toggle("wait", state === "wait");
+    mic.setAttribute("aria-pressed", state === "rec" ? "true" : "false");
+    clearInterval(timerId); micTimer.textContent = "";
+    if (state === "rec") { startedAt = Date.now(); timerId = setInterval(tick, 250); tick(); }
+  }
+  function tick() {
+    var sec = Math.floor((Date.now() - startedAt) / 1000);
+    micTimer.textContent = Math.floor(sec / 60) + ":" + ("0" + sec % 60).slice(-2);
+    if (sec >= MAX_SEC && rec) rec.stop(false);
+  }
+  function putText(text, done) {
+    input.value = baseText + (baseText && text ? " " : "") + text;
+    if (!done) return;
+    input.focus();
+    if (voice.autosend && text && !busy) send();
+  }
+  function micError(msg) { add(el("div", "msg error", esc(msg))); }
+
+  function startServer() {
+    micState("wait");
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
+      var type = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm", "audio/mp4"].filter(function (t) {
+        return MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t);
+      })[0];
+      var mr = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+      var chunks = [], cancelled = false;
+      mr.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      mr.onstop = function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        rec = null;
+        if (cancelled || !chunks.length) { micState(""); return; }
+        micState("wait");
+        var blob = new Blob(chunks, { type: mr.mimeType || type || "audio/webm" });
+        var reader = new FileReader();
+        reader.onload = function () {
+          api("POST", "/api/transcribe", { data: String(reader.result).split(",")[1] || "", mime: blob.type }).then(function (r) {
+            micState("");
+            if (r.text) putText(r.text, true);
+            else micError("Речь не распознана. Попробуйте ещё раз, ближе к микрофону.");
+          }).catch(function (e) {
+            micState("");
+            if (voice.engine === "auto" && SR) {
+              serverFailed = true;
+              micError(e.message + " Дальше распознаю речь средствами браузера: нажмите микрофон и повторите.");
+            } else micError(e.message);
+          });
+        };
+        reader.readAsDataURL(blob);
+      };
+      baseText = input.value.trim();
+      mr.start(1000);
+      rec = { stop: function (cancel) { cancelled = !!cancel; if (mr.state !== "inactive") mr.stop(); } };
+      micState("rec");
+    }).catch(function (e) {
+      micState("");
+      var name = e && e.name;
+      micError(name === "NotAllowedError" || name === "SecurityError"
+        ? "Нет доступа к микрофону. Разрешите его в адресной строке браузера (значок микрофона или замка) и нажмите ещё раз."
+        : name === "NotFoundError" ? "Микрофон не найден. Подключите его и попробуйте снова."
+        : "Не удалось включить микрофон: " + ((e && e.message) || e));
+    });
+  }
+
+  function startBrowser() {
+    var r = new SR(), finalText = "", cancelled = false;
+    r.lang = "ru-RU"; r.interimResults = true; r.continuous = true;
+    baseText = input.value.trim();
+    r.onresult = function (e) {
+      var interim = "";
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalText += " " + e.results[i][0].transcript;
+        else interim += " " + e.results[i][0].transcript;
+      }
+      putText((finalText + interim).replace(/\s+/g, " ").trim(), false);
+    };
+    r.onerror = function (e) {
+      var msg = {
+        "not-allowed": "Нет доступа к микрофону. Разрешите его в адресной строке браузера и нажмите ещё раз.",
+        "service-not-allowed": "Браузер запретил распознавание речи. Выберите в настройках распознавание через шлюз LLM.",
+        "no-speech": "Не услышал речь. Проверьте микрофон и попробуйте ещё раз.",
+        "audio-capture": "Микрофон не найден. Подключите его и попробуйте снова.",
+        "network": "Распознавание в браузере работает через интернет (серверы Google/Microsoft), а связи нет."
+      }[e.error];
+      if (e.error !== "aborted") micError(msg || ("Ошибка распознавания речи: " + e.error));
+    };
+    r.onend = function () {
+      rec = null; micState("");
+      var text = finalText.replace(/\s+/g, " ").trim();
+      if (cancelled || !text) input.value = baseText;
+      else putText(text, true);
+    };
+    r.start();
+    rec = { stop: function (cancel) { cancelled = !!cancel; if (cancel) r.abort(); else r.stop(); } };
+    micState("rec");
+  }
+
+  mic.onclick = function () {
+    if (mic.classList.contains("wait")) return;
+    if (rec) { rec.stop(false); return; }
+    var engine = engineNow();
+    if (!engine) {
+      micError(voice.engine === "browser"
+        ? "Этот браузер не умеет распознавать речь сам. Откройте чат в Chrome или Edge либо выберите в настройках распознавание через шлюз LLM."
+        : "Этот браузер не умеет записывать звук. Откройте чат в Chrome, Edge или Firefox.");
+      return;
+    }
+    if (engine === "server") startServer(); else startBrowser();
+  };
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && rec) { e.preventDefault(); rec.stop(true); } });
+
   // ---------- settings
   var dlg = $("settings");
   function status(text, cls) { var s = $("cfgStatus"); s.textContent = text || ""; s.className = "hint " + (cls || ""); }
@@ -214,6 +341,8 @@
       $("cfgKey").value = ""; $("cfgKey").placeholder = c.has_key ? ("сохранён: " + c.key_masked + " — оставьте пустым, чтобы не менять") : "введите ключ";
       $("cfgTemp").value = c.temperature; $("cfgSteps").value = c.max_steps; $("cfgResults").value = c.results_dir || "";
       $("cfgSsl").checked = !!c.ssl_verify; $("cfgDev").checked = !!c.dev_mode; $("cfgCompact").checked = c.compact_history !== false; $("devConsole").hidden = !c.dev_mode;
+      $("cfgVoice").value = c.voice_engine || "auto"; $("cfgVoiceModel").value = c.voice_model || ""; $("cfgVoiceSend").checked = !!c.voice_autosend;
+      voice.engine = c.voice_engine || "auto"; voice.autosend = !!c.voice_autosend; serverFailed = false;
       return c;
     });
   }
@@ -222,7 +351,8 @@
       llm_url: $("cfgUrl").value.trim(), llm_key: $("cfgKey").value.trim(), llm_model: $("cfgModel").value.trim(),
       temperature: parseFloat($("cfgTemp").value || "0.2"), max_steps: parseInt($("cfgSteps").value || "30", 10),
       results_dir: $("cfgResults").value.trim(), ssl_verify: $("cfgSsl").checked, dev_mode: $("cfgDev").checked,
-      compact_history: $("cfgCompact").checked
+      compact_history: $("cfgCompact").checked,
+      voice_engine: $("cfgVoice").value, voice_model: $("cfgVoiceModel").value.trim(), voice_autosend: $("cfgVoiceSend").checked
     }).then(function () { status("Сохранено", "ok"); return loadConfig(); }).catch(function (e) { status(e.message, "err"); });
   }
   $("btnSettings").onclick = function () { status(""); loadConfig().then(function () { dlg.showModal(); }); };
