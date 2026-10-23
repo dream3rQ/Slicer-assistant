@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Assistant · STE Slicer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot" id="statusDot"></span><b>AI Assistant</b><span class="sub">STE Slicer</span></div>
+  <div class="actions">
+    <button type="button" id="btnNew" class="ghost" title="Новый диалог">Новый диалог</button>
+    <button type="button" id="btnSettings" class="ghost" title="Настройки">Настройки</button>
+  </div>
+</header>
+
+<main id="chat" class="chat" aria-live="polite">
+  <div class="empty" id="empty">
+    <h1>Опишите задачу печати</h1>
+    <p>Например: «Кронштейн под нагрузку, PETG, без поддержек». Приложите STL/OBJ/3MF, фото или ТЗ в .docx — ассистент сам подберёт режим, материал и настройки, нарежет модель и объяснит решения.</p>
+  </div>
+</main>
+
+<form id="composer" class="composer">
+  <div id="chips" class="chips"></div>
+  <div class="row">
+    <label class="attach" title="Прикрепить файлы">
+      <input type="file" id="fileInput" multiple accept=".stl,.obj,.3mf,.png,.jpg,.jpeg,.webp,.docx,.txt,.md">
+      <span>＋</span>
+    </label>
+    <textarea id="input" rows="2" placeholder="Опишите деталь и требования… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+    <button type="submit" id="btnSend" class="primary">Отправить</button>
+    <button type="button" id="btnStop" class="danger" hidden>Стоп</button>
+  </div>
+</form>
+
+<div id="drop" class="drop" hidden>Отпустите файлы, чтобы прикрепить</div>
+
+<dialog id="settings">
+  <form method="dialog" class="settings" id="settingsForm">
+    <h2>Настройки</h2>
+    <label>URL LLM (OpenAI-совместимый)<input id="cfgUrl" type="url" placeholder="https://…/v1" autocomplete="off"></label>
+    <label>Ключ доступа<input id="cfgKey" type="password" placeholder="оставьте пустым, чтобы не менять" autocomplete="off"></label>
+    <label>Модель<input id="cfgModel" list="modelList" placeholder="имя модели"><datalist id="modelList"></datalist></label>
+    <div class="inline">
+      <label>Temperature<input id="cfgTemp" type="number" step="0.1" min="0" max="2"></label>
+      <label>Макс. шагов<input id="cfgSteps" type="number" min="1" max="100"></label>
+    </div>
+    <label>Папка результатов<input id="cfgResults" placeholder="по умолчанию Документы/STE AI Assistant/results"></label>
+    <label class="check"><input id="cfgSsl" type="checkbox"> Проверять SSL-сертификат</label>
+    <label class="check"><input id="cfgCompact" type="checkbox"> Экономить токены (сокращать старую историю)</label>
+    <label class="check"><input id="cfgDev" type="checkbox"> Режим разработчика (консоль)</label>
+    <p class="hint" id="cfgStatus"></p>
+    <div class="buttons">
+      <button type="button" id="btnTest" class="ghost">Проверить подключение</button>
+      <button type="button" id="btnDump" class="ghost">Скачать все настройки слайсера</button>
+      <span class="spacer"></span>
+      <button type="button" id="btnClose" class="ghost">Закрыть</button>
+      <button type="button" id="btnSave" class="primary">Сохранить</button>
+    </div>
+    <section id="devConsole" hidden>
+      <h3>Консоль разработчика</h3>
+      <textarea id="devCode" rows="5" spellcheck="false">app.getGlobalContainerStack().getProperty("printing_mode", "value")</textarea>
+      <button type="button" id="btnEval" class="ghost">Выполнить в слайсере</button>
+      <pre id="devOut"></pre>
+    </section>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,493 @@
+<title>Опросник печатника</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=Unbounded:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of question cards, sticky progress bar, section chips to jump between parts. */
+:root {
+  --bg: #f4f6f5; --paper: #ffffff; --ink: #18211f; --muted: #5d6b67; --line: #d6dedb;
+  --accent: #0b7a6b; --accent-soft: #dff1ec; --warn: #9a5b00; --warn-soft: #fbefd9;
+  --display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1514; --paper: #17201e; --ink: #e5ece9; --muted: #95a6a1; --line: #2a3734;
+  --accent: #3cc2ad; --accent-soft: #163a34; --warn: #f0b252; --warn-soft: #3a2c14; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1514; --paper: #17201e; --ink: #e5ece9; --muted: #95a6a1; --line: #2a3734;
+  --accent: #3cc2ad; --accent-soft: #163a34; --warn: #f0b252; --warn-soft: #3a2c14; color-scheme: dark }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body); margin: 0; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--paper); }
+.wrap { max-width: 760px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--paper); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; flex-direction: column; gap: 8px; padding-block: 10px; }
+.bar-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand { font: 600 15px/1.2 var(--display); letter-spacing: .01em; }
+.count { font: 500 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+.meter { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.meter span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.chips a { flex: none; font-size: 12.5px; text-decoration: none; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+.chips a.done { background: var(--accent-soft); border-color: var(--accent); }
+.chips a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#status { font-size: 12.5px; color: var(--muted); }
+#status.warn { color: var(--warn); }
+
+main .wrap { display: flex; flex-direction: column; gap: 28px; padding-block: 24px 64px; }
+.intro h1 { font: 600 clamp(22px, 4vw, 30px)/1.2 var(--display); margin: 0 0 10px; text-wrap: balance; }
+.intro p { margin: 0 0 8px; max-width: 65ch; }
+.intro ul { margin: 4px 0 0; padding-left: 20px; }
+section.part { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 120px; }
+section.part > h2 { font: 600 18px/1.3 var(--display); margin: 0; text-wrap: balance; }
+.brief { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+.brief dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.brief dt { color: var(--muted); }
+.brief dd { margin: 0; min-width: 0; }
+.mode-tag { display: inline-block; font: 500 12px var(--mono); background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 1px 6px; }
+
+.q { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.q.answered { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.q-head { display: flex; gap: 10px; align-items: baseline; }
+.q-id { font: 500 12px var(--mono); color: var(--muted); flex: none; }
+.q-text { font-weight: 500; }
+.q-hint { font-size: 13px; color: var(--muted); margin-top: -4px; }
+.opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.opt { position: relative; }
+.opt input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.opt span { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 14px; cursor: pointer; background: var(--bg); }
+.opt input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 500; }
+.opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.opt.unsure span { border-style: dashed; color: var(--muted); }
+.opt.unsure input:checked + span { background: var(--warn-soft); border-color: var(--warn); color: var(--ink); }
+select, input[type=text], textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%; }
+textarea { resize: vertical; min-height: 38px; }
+.extra { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.extra.closed .more { display: none; }
+.toggle-more { justify-self: start; background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+
+.done-box { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.btn { font: 500 14px var(--body); border-radius: 8px; padding: 8px 14px; border: 1px solid var(--accent); background: var(--accent); color: var(--paper); cursor: pointer; align-self: flex-start; }
+#exportText { font: 12px/1.5 var(--mono); min-height: 140px; }
+@media (prefers-reduced-motion: reduce) { .meter span { transition: none; } }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="bar-row">
+      <div class="brand">Опросник печатника</div>
+      <div id="status">Подключаю хранилище…</div>
+      <div class="count" id="count">0 / 0</div>
+    </div>
+    <div class="meter"><span id="meter"></span></div>
+    <nav class="chips" id="chips" aria-label="Разделы"></nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap" id="root">
+    <div class="intro">
+      <h1>Как бы ты напечатал эти детали на Hybrid 530</h1>
+      <p>Твои ответы станут правилами для ИИ-ассистента в слайсере и эталоном, с которым мы будем сверять его решения. Отвечай как для реальной печати, а не как по учебнику.</p>
+      <ul>
+        <li>Ничего не выбрано заранее: так мои догадки не подталкивают к ответу.</li>
+        <li>Если сомневаешься, жми «не уверен». Такие ответы агент не возьмёт как жёсткое правило.</li>
+        <li>Если ни один вариант не подходит, пиши в «другое» или в комментарий.</li>
+        <li>Всё сохраняется само после каждого клика. Можно бросить и вернуться позже.</li>
+        <li>Начни с деталей Д1–Д7: они важнее общих правил.</li>
+      </ul>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var MATERIALS = [
+    ["proto_pla", "Proto PLA"], ["enduse_abs", "Enduse ABS"], ["enduse_petg", "Enduse PETG"], ["enduse_pc", "Enduse PC"],
+    ["enduse_pa6", "Enduse PA6"], ["enduse_pp", "Enduse PP"], ["enduse_sbs", "Enduse SBS"], ["enduse_tpu_d70", "Enduse TPU D70"],
+    ["fiberpart_abs_g4", "Fiberpart ABS G4"], ["fiberpart_abs_g13", "Fiberpart ABS G13"], ["fiberpart_abspa_g8", "Fiberpart ABS/PA G8"],
+    ["fiberpart_pa12_g12", "Fiberpart PA12 G12"], ["fiberpart_pc_g20", "Fiberpart PC G20"], ["fiberpart_pp_g30", "Fiberpart PP G30"],
+    ["fiberpart_tpu_c5", "Fiberpart TPU C5"], ["fiberpart_tpu_g30", "Fiberpart TPU G30"], ["sealant_sebs", "Sealant SEBS"],
+    ["sealant_tpe", "Sealant TPE"], ["sealant_tpu", "Sealant TPU"], ["sealant_tpu93", "Sealant TPU 93"],
+    ["sealant_tpu_A95", "Sealant TPU A95"], ["sealant_tpv80", "Sealant TPV 80"], ["contifiber_cpa", "ContiFiber CPA"]
+  ];
+  var LAYER = ["0.1 мм", "0.15 мм", "0.2 мм", "0.25 мм", "0.3 мм"];
+  var WALLS = ["2", "3", "4", "6", "8 и больше"];
+  var INFILL = ["15–20 %", "30–40 %", "50–60 %", "80 %", "100 %"];
+  var SUPPORT = ["Не нужны", "Только от стола", "Везде", "Растворимые (PVA)"];
+  var ADHESION = ["Ничего", "Юбка (skirt)", "Кайма (brim)", "Подложка (raft)"];
+  var RAFT5D = ["Без подложки", "Сплошная (solid)", "Непрерывная (continuous)", "С зазором (gapped)"];
+  var MODE5D = ["5D Spiral (cylindrical)", "5D (cylindrical_full)", "Всё-таки 3D"];
+  var AGREE = ["Согласен", "Не согласен", "Зависит от детали"];
+
+  // Each part: brief from the ТЗ, mode given by the organisers' folder names.
+  var PARTS = [
+    { id: "d1", name: "Д1. Шестерня привода троса", mode: "3D", facts: [
+      ["Размер", "Ø33 × 10 мм, ступица со стопорным винтом"],
+      ["Нагрузка", "25 Н·м, пик 75 Н·м, старт-стоп, микроудары, 4–6 об/мин"],
+      ["Среда", "влажность 85–98 %, +10…+70 °C, прямой УФ, слабые кислоты и соли"],
+      ["Главное", "точная эвольвента и шаг; гидрофобный, жёсткий, Tg ≥ 85–90 °C"]] },
+    { id: "d2", name: "Д2. Колесо конвейерной линии", mode: "5D", facts: [
+      ["Работа", "450 об/мин 24/7, до 18 кг на колесо, микроудары"],
+      ["Среда", "+20 °C, протирка IPA и перекисью, чистый цех"],
+      ["Главное", "высокое трение по бумаге, без следов и пыления, отверстие ±0,1 мм, желательно ESD; оригинал расслаивался между ступицей и протектором"]] },
+    { id: "d3", name: "Д3. Пыльник ШРУСа", mode: "3D", facts: [
+      ["Работа", "изгиб до 42°, ход ±30 мм, до 1000 об/мин"],
+      ["Среда", "0…+75 °C, смазка MoS2, бензин и дизель, дорожные соли, камни"],
+      ["Главное", "эластичный во всём диапазоне, масло- и бензостойкий, герметичный"]] },
+    { id: "d4", name: "Д4. Декоративная фигурка", mode: "?", facts: [
+      ["Партия", "15 штук"],
+      ["Среда", "комната, до +60 °C на солнце, спиртовые салфетки"],
+      ["Главное", "не видно слоёв и следов поддержек, не желтеет от УФ, тонкие элементы не ломаются"]] },
+    { id: "d5", name: "Д5. Рабочее колесо насоса Wilo", mode: "5D", facts: [
+      ["Работа", "2900 об/мин, окружная скорость ~24 м/с, шпоночный паз 12 Н·м"],
+      ["Среда", "вода с гликолем, pH 9,5–10,5, +75…+85 °C постоянно, окалина"],
+      ["Главное", "водопоглощение ≤ 0,05 %, модуль ≥ 4500 МПа, Вика ≥ 130 °C, плотность ≤ 1,2, без токопроводящих наполнителей, дисбаланс G2.5, разностенность ≤ 0,3 мм"]] },
+    { id: "d6", name: "Д6. Крыльчатка охлаждения электродвигателя", mode: "3D", facts: [
+      ["Работа", "2950 об/мин, ~32 м/с на концах лопастей, цанговая клипса"],
+      ["Среда", "60–65 °C, масляный туман СОЖ, озон, стружка"],
+      ["Главное", "не размягчается при 65 °C, ≤ 1,25 г/см³, лопасть гнётся или отрывается целиком, но не колется на осколки"]] },
+    { id: "d7", name: "Д7. Ось передающих звёзд Krones", mode: "5D", facts: [
+      ["Работа", "65 об/мин, 35 Н на ролик, кручение 18 Н·м, ролики из POM"],
+      ["Среда", "+15…+35 °C, целлюлозная пыль, щелочная мойка pH 10–11, капли клея до 160 °C"],
+      ["Главное", "профиль кулачка ±0,15 мм, без ступенек от слоёв, низкое трение по POM без смазки, износостойкость, пищевая зона"]] }
+  ];
+
+  var SECTIONS = [];
+  PARTS.forEach(function (p) {
+    var qs = [];
+    var n = 1;
+    function q(o) { o.id = p.id + "_" + o.key; o.num = p.name.split(".")[0] + "." + (n++); qs.push(o); }
+    if (p.mode === "?") q({ key: "mode", text: "Режим печати", type: "multi", options: ["3D (classic)"].concat(MODE5D.slice(0, 2)) });
+    if (p.mode === "5D") q({ key: "mode5d", text: "Какой из 5D-режимов", hint: "Организаторы отнесли деталь к 5D. Можно отметить несколько, если устроят оба.", type: "multi", options: MODE5D });
+    q({ key: "material", text: "Материал", type: "material" });
+    q({ key: "layer", text: "Высота слоя", type: "multi", options: LAYER });
+    q({ key: "walls", text: "Число стенок (периметров)", type: "multi", options: WALLS });
+    q({ key: "infill", text: "Заполнение", type: "multi", options: INFILL });
+    if (p.mode === "5D") {
+      q({ key: "raft5d", text: "Подложка на цилиндрическом основании", type: "multi", options: RAFT5D });
+      q({ key: "support5d", text: "Поддержки на 5D-поверхности", type: "one", options: ["Не нужны", "Нужны"] });
+    } else {
+      q({ key: "support", text: "Поддержки", type: "multi", options: SUPPORT });
+      q({ key: "adhesion", text: "Адгезия к столу", type: "multi", options: ADHESION });
+      q({ key: "orient", text: "Как положить деталь на стол", hint: "Например: плашмя, ступицей вниз, зубья в плоскости слоя.", type: "text" });
+    }
+    q({ key: "risk", text: "Что здесь чаще всего идёт не так и какую одну настройку ты бы точно поменял", type: "text" });
+    SECTIONS.push({ id: p.id, title: p.name, part: p, questions: qs });
+  });
+
+  SECTIONS.push({ id: "g1", title: "О1. Когда 5D, а когда 3D", questions: [
+    { id: "g1_axialhole", num: "О1.1", text: "5D имеет смысл только для тела вращения со сквозным осевым отверстием под основание", type: "one", options: AGREE },
+    { id: "g1_gear", num: "О1.2", text: "Шестерни и звёздочки печатаем в 3D, даже если это тело вращения: профиль зуба точнее в плоскости слоя", type: "one", options: AGREE },
+    { id: "g1_flat", num: "О1.3", text: "Плоские диски и крыльчатки (высота меньше четверти диаметра) печатаем в 3D", type: "one", options: AGREE },
+    { id: "g1_delam", num: "О1.4", text: "Если в ТЗ проблема в расслоении ступицы и обода, выбираем 5D", type: "one", options: AGREE },
+    { id: "g1_spiral", num: "О1.5", text: "Когда 5D Spiral лучше, чем 5D (full)?", type: "multi", options: ["Тонкостенные втулки и трубки", "Когда важна скорость печати", "Почти никогда", "Другое"] },
+    { id: "g1_base", num: "О1.6", text: "Минимальный диаметр осевого отверстия, при котором деталь можно печатать на основании", type: "one", options: ["6 мм", "8 мм", "10 мм", "12 мм и больше"] },
+    { id: "g1_layer5d", num: "О1.7", text: "Высота слоя на 5D-поверхности (cylindrical_layer_height) по сравнению с обычной", type: "one", options: ["Такая же", "Меньше, для гладкости", "Больше, для скорости"] }
+  ]});
+
+  var M = MATERIALS.filter(function (m) { return m[0] !== "contifiber_cpa"; }).map(function (m) { return m[1]; });
+  SECTIONS.push({ id: "g2", title: "О2. Материалы под условия", questions: [
+    { id: "g2_wet", num: "О2.1", text: "Жёсткая деталь в воде или влажности 90 %+, без набухания", type: "multi", options: M },
+    { id: "g2_uv", num: "О2.2", text: "Деталь под прямым солнцем годами", type: "multi", options: M },
+    { id: "g2_pom", num: "О2.3", text: "Трение скольжения по POM без смазки, абразивная пыль", type: "multi", options: M },
+    { id: "g2_food", num: "О2.4", text: "Контакт с пищей или пищевая зона", type: "multi", options: M },
+    { id: "g2_oilflex", num: "О2.5", text: "Гибкая деталь, стойкая к маслу и бензину", type: "multi", options: M },
+    { id: "g2_hotalk", num: "О2.6", text: "Горячая щелочная среда (+85 °C, pH 10)", type: "multi", options: M },
+    { id: "g2_dry", num: "О2.7", text: "Какие материалы обязательно сушить перед печатью", type: "multi", options: M },
+    { id: "g2_hard", num: "О2.8", text: "Какие материалы капризные на Hybrid 530 (коробит, плохо липнет, забивает сопло)", type: "multi", options: M },
+    { id: "g2_table", num: "О2.9", text: "Проверил таблицу свойств материалов (materials_draft.xlsx)?", type: "one", options: ["Да, поправил", "Да, всё верно", "Ещё нет"] }
+  ]});
+
+  SECTIONS.push({ id: "g3", title: "О3. Настройки по умолчанию", questions: [
+    { id: "g3_layer", num: "О3.1", text: "Высота слоя для обычной функциональной детали", type: "multi", options: LAYER },
+    { id: "g3_precise", num: "О3.2", text: "Высота слоя для точного профиля (зубья, кулачок, посадки)", type: "multi", options: LAYER },
+    { id: "g3_walls", num: "О3.3", text: "Стенок для нагруженной детали", type: "multi", options: WALLS },
+    { id: "g3_infill", num: "О3.4", text: "Заполнение для нагруженной детали", type: "multi", options: INFILL },
+    { id: "g3_pattern", num: "О3.5", text: "Узор заполнения для нагруженной детали", type: "multi", options: ["Сетка (grid)", "Треугольники", "Кубический", "Гироид", "Концентрический"] },
+    { id: "g3_temp", num: "О3.6", text: "Температуры сопла и стола", type: "one", options: ["Беру из профиля материала как есть", "Обычно чуть поднимаю для прочности слоёв", "Подбираю под каждую деталь"] },
+    { id: "g3_cool", num: "О3.7", text: "Обдув для PC, ABS и PA", type: "one", options: ["Выключен", "До 20 %", "30–50 %", "Как в профиле"] },
+    { id: "g3_holes", num: "О3.8", text: "Как получить точное отверстие под вал (±0,1 мм)", type: "multi", options: ["Горизонтальная компенсация (xy_offset / hole offset)", "Печатаю меньше и рассверливаю", "Ничего не делаю, профиль справляется"] },
+    { id: "g3_quality", num: "О3.9", text: "Какой профиль качества берёшь как стартовый", type: "multi", options: ["Extra Fine / high", "Fine / normal", "Normal / fast", "Draft"] }
+  ]});
+
+  SECTIONS.push({ id: "g4", title: "О4. Ориентация и последнее", questions: [
+    { id: "g4_face", num: "О4.1", text: "Кладём деталь самой большой плоской гранью на стол", type: "one", options: AGREE },
+    { id: "g4_load", num: "О4.2", text: "Нагрузку стараемся направить вдоль слоёв, а не на отрыв слоёв", type: "one", options: AGREE },
+    { id: "g4_mistakes", num: "О4.3", text: "Три ошибки, которые чаще всего делают новички на этом принтере", type: "text" },
+    { id: "g4_other", num: "О4.4", text: "Что ещё агент обязательно должен знать", type: "text" }
+  ]});
+
+  var ALL = [];
+  SECTIONS.forEach(function (s) { s.questions.forEach(function (q) { q.section = s.id; ALL.push(q); }); });
+
+  // ---------- state
+  var answers = {};          // id -> {choice, other, comment, unsure}
+  var db = null, col = null, pending = {}, timers = {};
+  var LS_KEY = "print-quiz-v1";
+  try { answers = JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {}; } catch (e) { answers = {}; }
+
+  function isAnswered(a) {
+    if (!a) return false;
+    if (a.unsure) return true;
+    if (Array.isArray(a.choice) ? a.choice.length : a.choice) return true;
+    if (a.also && a.also.length) return true;
+    return !!((a.other || "").trim() || (a.comment || "").trim());
+  }
+
+  function saveLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(answers)); } catch (e) {} }
+
+  function setStatus(text, warn) { var s = document.getElementById("status"); s.textContent = text; s.className = warn ? "warn" : ""; }
+
+  function queueSave(id) {
+    saveLocal();
+    updateProgress();
+    if (!col) return;
+    // Mark at once, so a snapshot arriving before the write cannot undo this click.
+    pending[id] = true;
+    clearTimeout(timers[id]);
+    timers[id] = setTimeout(function () {
+      var a = answers[id] || {};
+      var q = ALL.filter(function (x) { return x.id === id; })[0];
+      setStatus("Сохраняю…");
+      col.doc(id).set({
+        question: q ? q.num + " " + q.text : id,
+        section: q ? q.section : "",
+        choice: a.choice == null ? null : a.choice,
+        also: a.also || [],
+        other: a.other || "",
+        comment: a.comment || "",
+        unsure: !!a.unsure,
+        updated: new Date().toISOString()
+      }).then(function () {
+        delete pending[id];
+        if (!Object.keys(pending).length) setStatus("Сохранено");
+      }).catch(function (e) {
+        delete pending[id];
+        setStatus("Не сохранилось в общее хранилище (" + (e && e.code || "ошибка") + "). Ответы остались в этом браузере, в конце скопируй их кнопкой.", true);
+      });
+    }, 500);
+  }
+
+  // ---------- render
+  var root = document.getElementById("root");
+  var chips = document.getElementById("chips");
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  function optionInput(q, value, label, kind, extraCls) {
+    var wrap = el("label", "opt" + (extraCls ? " " + extraCls : ""));
+    var input = document.createElement("input");
+    input.type = kind; input.name = q.id; input.value = value; input.id = q.id + "__" + value.replace(/[^\wа-яё]+/gi, "_");
+    var span = el("span", null, label);
+    wrap.appendChild(input); wrap.appendChild(span);
+    return wrap;
+  }
+
+  function renderQuestion(q) {
+    var box = el("div", "q"); box.id = "q_" + q.id;
+    var head = el("div", "q-head");
+    head.appendChild(el("span", "q-id", q.num));
+    head.appendChild(el("span", "q-text", q.text));
+    box.appendChild(head);
+    var hint = q.hint || (q.type === "multi" ? "Можно отметить несколько: все варианты, которые тебя устроят." : "");
+    if (hint) box.appendChild(el("div", "q-hint", hint));
+
+    if (q.type === "one" || q.type === "multi") {
+      var opts = el("div", "opts");
+      q.options.forEach(function (o) { opts.appendChild(optionInput(q, o, o, q.type === "one" ? "radio" : "checkbox")); });
+      opts.appendChild(optionInput(q, "__unsure", "не уверен", "checkbox", "unsure"));
+      box.appendChild(opts);
+    } else if (q.type === "material") {
+      var sel = document.createElement("select"); sel.id = q.id + "__select";
+      sel.appendChild(new Option("Выбери материал…", ""));
+      MATERIALS.forEach(function (m) { sel.appendChild(new Option(m[1], m[0])); });
+      box.appendChild(sel);
+      // "Also fine" set: lets the check accept the agent's choice when it is acceptable but not the favourite.
+      box.appendChild(el("div", "q-hint", "Тоже подойдут (можно несколько):"));
+      var also = el("div", "opts also");
+      MATERIALS.forEach(function (m) {
+        var w = el("label", "opt"); var i = document.createElement("input");
+        i.type = "checkbox"; i.name = q.id + "_also"; i.value = m[0]; i.id = q.id + "__also_" + m[0];
+        w.appendChild(i); w.appendChild(el("span", null, m[1])); also.appendChild(w);
+      });
+      box.appendChild(also);
+      var o2 = el("div", "opts");
+      o2.appendChild(optionInput(q, "__unsure", "не уверен", "checkbox", "unsure"));
+      box.appendChild(o2);
+    } else {
+      var ta = document.createElement("textarea"); ta.id = q.id + "__text"; ta.rows = 2; ta.placeholder = "Свободный ответ";
+      box.appendChild(ta);
+    }
+
+    if (q.type !== "text") {
+      var extra = el("div", "extra closed");
+      var btn = el("button", "toggle-more", q.type === "material" ? "+ материал не из списка или комментарий" : "+ другое или комментарий");
+      btn.type = "button";
+      var other = document.createElement("input"); other.type = "text"; other.className = "more"; other.id = q.id + "__other";
+      other.placeholder = q.type === "material" ? "Материал не из списка" : "Другое";
+      var comment = document.createElement("textarea"); comment.className = "more"; comment.id = q.id + "__comment"; comment.rows = 2;
+      comment.placeholder = "Почему так (поможет агенту объяснять решение)";
+      btn.onclick = function () { extra.classList.toggle("closed"); btn.hidden = true; other.focus(); };
+      extra.appendChild(btn); extra.appendChild(other); extra.appendChild(comment);
+      box.appendChild(extra);
+    }
+
+    box.addEventListener("input", function () { readQuestion(q, box); });
+    box.addEventListener("change", function () { readQuestion(q, box); });
+    return box;
+  }
+
+  function readQuestion(q, box) {
+    var a = answers[q.id] || {};
+    if (q.type === "one") {
+      var r = box.querySelector("input[type=radio]:checked"); a.choice = r ? r.value : null;
+    } else if (q.type === "multi") {
+      a.choice = Array.prototype.map.call(box.querySelectorAll("input[type=checkbox]:checked"), function (i) { return i.value; })
+        .filter(function (v) { return v !== "__unsure"; });
+    } else if (q.type === "material") {
+      a.choice = box.querySelector("select").value || null;
+      a.also = Array.prototype.map.call(box.querySelectorAll(".also input:checked"), function (i) { return i.value; });
+    } else {
+      a.choice = box.querySelector("textarea").value;
+    }
+    var u = box.querySelector("input[value=__unsure]"); a.unsure = !!(u && u.checked);
+    var o = box.querySelector("input.more"); a.other = o ? o.value : "";
+    var c = box.querySelector("textarea.more"); a.comment = c ? c.value : "";
+    answers[q.id] = a;
+    box.classList.toggle("answered", isAnswered(a));
+    queueSave(q.id);
+  }
+
+  function fillQuestion(q) {
+    var box = document.getElementById("q_" + q.id); var a = answers[q.id];
+    if (!box || !a) return;
+    if (box.contains(document.activeElement) && document.activeElement.tagName !== "INPUT") return;
+    if (q.type === "one" || q.type === "multi") {
+      var chosen = Array.isArray(a.choice) ? a.choice : (a.choice ? [a.choice] : []);
+      box.querySelectorAll(".opts input").forEach(function (i) {
+        i.checked = i.value === "__unsure" ? !!a.unsure : chosen.indexOf(i.value) >= 0;
+      });
+    } else if (q.type === "material") {
+      box.querySelector("select").value = a.choice || "";
+      var alsoSet = a.also || [];
+      box.querySelectorAll(".also input").forEach(function (i) { i.checked = alsoSet.indexOf(i.value) >= 0; });
+      box.querySelector("input[value=__unsure]").checked = !!a.unsure;
+    } else if (document.activeElement !== box.querySelector("textarea")) {
+      box.querySelector("textarea").value = a.choice || "";
+    }
+    var o = box.querySelector("input.more"), c = box.querySelector("textarea.more");
+    if (o && document.activeElement !== o) o.value = a.other || "";
+    if (c && document.activeElement !== c) c.value = a.comment || "";
+    if (o && ((a.other || "") || (a.comment || ""))) { box.querySelector(".extra").classList.remove("closed"); box.querySelector(".toggle-more").hidden = true; }
+    box.classList.toggle("answered", isAnswered(a));
+  }
+
+  SECTIONS.forEach(function (s) {
+    var sec = el("section", "part"); sec.id = s.id;
+    var h = el("h2", null, s.title + " ");
+    if (s.part) h.appendChild(el("span", "mode-tag", s.part.mode === "?" ? "режим не задан" : s.part.mode));
+    sec.appendChild(h);
+    if (s.part) {
+      var b = el("div", "brief"); var dl = document.createElement("dl");
+      s.part.facts.forEach(function (f) { dl.appendChild(el("dt", null, f[0])); dl.appendChild(el("dd", null, f[1])); });
+      b.appendChild(dl); sec.appendChild(b);
+    }
+    s.questions.forEach(function (q) { sec.appendChild(renderQuestion(q)); });
+    root.appendChild(sec);
+    var a = el("a", null, s.title.split(".")[0]); a.href = "#" + s.id; a.id = "chip_" + s.id; a.title = s.title;
+    chips.appendChild(a);
+  });
+
+  var done = el("section", "done-box part"); done.id = "export";
+  done.appendChild(el("h2", null, "Готово?"));
+  done.appendChild(el("p", null, "Если вверху написано «Сохранено», больше ничего делать не нужно: ответы уже у команды. Если было предупреждение, скопируй ответы и отправь Нику."));
+  var copyBtn = el("button", "btn", "Скопировать ответы"); copyBtn.type = "button";
+  var exportText = document.createElement("textarea"); exportText.id = "exportText"; exportText.readOnly = true; exportText.hidden = true;
+  copyBtn.onclick = function () {
+    var text = exportAnswers(); exportText.value = text; exportText.hidden = false;
+    var ok = function () { copyBtn.textContent = "Скопировано"; };
+    var fallback = function () { exportText.focus(); exportText.select(); copyBtn.textContent = "Выделено, нажми Ctrl+C"; };
+    try { navigator.clipboard.writeText(text).then(ok, fallback); } catch (e) { fallback(); }
+  };
+  done.appendChild(copyBtn);
+  // Offline copy of the page (opened from a file): a saved .txt survives a closed tab or another browser,
+  // which browser storage does not. Inside the claude.ai viewer downloads are blocked, so the button is hidden there.
+  if (!window.claude) {
+    var saveBtn = el("button", "btn", "Сохранить файл с ответами"); saveBtn.type = "button";
+    saveBtn.onclick = function () {
+      var blob = new Blob([exportAnswers() + "\n"], { type: "text/plain;charset=utf-8" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = "ответы_печатника.txt";
+      document.body.appendChild(a); a.click(); a.remove();
+      saveBtn.textContent = "Файл сохранён в «Загрузки»";
+    };
+    done.insertBefore(saveBtn, copyBtn);
+  }
+  done.appendChild(exportText);
+  root.appendChild(done);
+
+  function label(q, v) {
+    if (q.type === "material") { var m = MATERIALS.filter(function (x) { return x[0] === v; })[0]; return m ? m[1] + " (" + v + ")" : v; }
+    return v;
+  }
+  function exportAnswers() {
+    return ALL.map(function (q) {
+      var a = answers[q.id]; if (!isAnswered(a)) return null;
+      var c = Array.isArray(a.choice) ? a.choice.map(function (v) { return label(q, v); }).join(", ") : (a.choice ? label(q, a.choice) : "");
+      var line = q.num + " " + q.text + ": " + (c || "—");
+      if (a.also && a.also.length) line += " | тоже подойдут: " + a.also.map(function (v) { return label(q, v); }).join(", ");
+      if (a.unsure) line += " [не уверен]";
+      if (a.other) line += " | другое: " + a.other;
+      if (a.comment) line += " | комментарий: " + a.comment;
+      return line;
+    }).filter(Boolean).join("\n");
+  }
+
+  function updateProgress() {
+    var n = ALL.filter(function (q) { return isAnswered(answers[q.id]); }).length;
+    document.getElementById("count").textContent = n + " / " + ALL.length;
+    document.getElementById("meter").style.width = (100 * n / ALL.length) + "%";
+    SECTIONS.forEach(function (s) {
+      var all = s.questions.every(function (q) { return isAnswered(answers[q.id]); });
+      document.getElementById("chip_" + s.id).classList.toggle("done", all);
+    });
+  }
+
+  ALL.forEach(fillQuestion);
+  updateProgress();
+
+  // ---------- shared store
+  var useFn = window.claude && window.claude.use;
+  if (!useFn) { setStatus("Ответы сохраняются в этом браузере. В конце нажми «Сохранить файл с ответами» и отправь файл Нику.", true); return; }
+  window.claude.use("db").then(function (d) {
+    if (!d) { setStatus("Общее хранилище недоступно (нужно войти в claude.ai). Ответы сохраняются в этом браузере.", true); return; }
+    db = d; col = db.collection("answers");
+    setStatus("Ответы сохраняются автоматически");
+    var first = true;
+    col.onSnapshot(function (snap) {
+      snap.docs.forEach(function (doc) {
+        var data = doc.data(); if (!data || pending[doc.id]) return;
+        answers[doc.id] = { choice: data.choice, also: data.also, other: data.other, comment: data.comment, unsure: data.unsure };
+      });
+      if (first) {
+        // Push anything answered offline before the store connected.
+        Object.keys(answers).forEach(function (id) {
+          var inStore = snap.docs.some(function (doc) { return doc.id === id; });
+          if (!inStore && isAnswered(answers[id])) queueSave(id);
+        });
+        first = false;
+      }
+      saveLocal();
+      ALL.forEach(fillQuestion);
+      updateProgress();
+    }, function (e) {
+      setStatus("Связь с хранилищем потеряна (" + (e && e.code || "ошибка") + "). Обнови страницу.", true);
+    });
+  });
+})();
+</script>

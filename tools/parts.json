@@ -1,0 +1,209 @@
+{
+ "_about": "Эталонные ответы по 7 деталям кейса. source=opus_draft: черновик ИИ-эксперта, заменить ответами печатника. Пункты с «не уверен» не проверяются (skip). Диапазон [a, b] включает границы.",
+ "d1": {
+  "name": "Шестерня",
+  "match": "шестерн",
+  "source": "opus_draft",
+  "print_mode": [
+   "classic"
+  ],
+  "material": {
+   "best": "fiberpart_pc_g20",
+   "ok": [
+    "fiberpart_pa12_g12",
+    "fiberpart_abspa_g8"
+   ]
+  },
+  "layer_height": [
+   0.1,
+   0.15
+  ],
+  "wall_line_count": [
+   6,
+   99
+  ],
+  "infill_sparse_density": [
+   80,
+   100
+  ],
+  "support_enable": false,
+  "adhesion_type": [
+   "brim"
+  ],
+  "folder_match": "шестерн|shestern|gear"
+ },
+ "d5": {
+  "name": "Рабочее колесо насоса Wilo",
+  "match": "wilo|насос",
+  "source": "opus_draft",
+  "print_mode": [
+   "cylindrical_full"
+  ],
+  "material": {
+   "best": "fiberpart_pp_g30",
+   "ok": []
+  },
+  "layer_height": [
+   0.15,
+   0.2
+  ],
+  "wall_line_count": [
+   4,
+   6
+  ],
+  "infill_sparse_density": [
+   100,
+   100
+  ],
+  "folder_match": "wilo|насос|nasos|pump|impeller"
+ },
+ "d2": {
+  "name": "Колесо конвейерной линии",
+  "match": "(^|_)колесо\\.stl$",
+  "source": "opus_draft",
+  "print_mode": [
+   "cylindrical_full"
+  ],
+  "material": {
+   "best": "enduse_tpu_d70",
+   "ok": [
+    "fiberpart_tpu_c5"
+   ]
+  },
+  "layer_height": [
+   0.2,
+   0.2
+  ],
+  "wall_line_count": [
+   4,
+   6
+  ],
+  "infill_sparse_density": [
+   50,
+   80
+  ],
+  "support_enable_cylindrical": false,
+  "folder_match": "^колесо$|koleso$|konveier|conveyor|(?<!pump_)wheel"
+ },
+ "d3": {
+  "name": "Пыльник ШРУСа",
+  "match": "пыльник",
+  "source": "opus_draft",
+  "print_mode": [
+   "classic"
+  ],
+  "material": {
+   "best": "sealant_tpv80",
+   "ok": [
+    "sealant_tpu_A95",
+    "sealant_tpu"
+   ]
+  },
+  "layer_height": [
+   0.2,
+   0.2
+  ],
+  "wall_line_count": [
+   2,
+   3
+  ],
+  "infill_sparse_density": [
+   100,
+   100
+  ],
+  "adhesion_type": [
+   "brim"
+  ],
+  "folder_match": "пыльник|pylnik|boot|shrus|cv_"
+ },
+ "d4": {
+  "name": "Декоративная фигурка",
+  "match": "фигурк",
+  "source": "opus_draft",
+  "print_mode": [
+   "classic"
+  ],
+  "material": {
+   "best": "enduse_petg",
+   "ok": [
+    "enduse_sbs"
+   ]
+  },
+  "layer_height": [
+   0.1,
+   0.1
+  ],
+  "wall_line_count": [
+   3,
+   3
+  ],
+  "infill_sparse_density": [
+   15,
+   20
+  ],
+  "adhesion_type": [
+   "skirt"
+  ],
+  "folder_match": "фигур|figur"
+ },
+ "d6": {
+  "name": "Крыльчатка охлаждения электродвигателя",
+  "match": "крыльчатк",
+  "source": "opus_draft",
+  "print_mode": [
+   "classic"
+  ],
+  "material": {
+   "best": "fiberpart_pa12_g12",
+   "ok": [
+    "fiberpart_pp_g30",
+    "enduse_pa6"
+   ]
+  },
+  "layer_height": [
+   0.15,
+   0.2
+  ],
+  "wall_line_count": [
+   4,
+   4
+  ],
+  "infill_sparse_density": [
+   80,
+   100
+  ],
+  "adhesion_type": [
+   "brim"
+  ],
+  "folder_match": "крыльчат|krylchat|fan|cooling"
+ },
+ "d7": {
+  "name": "Ось передающих звёзд Krones",
+  "match": "звёзд|звезд|krones",
+  "source": "opus_draft",
+  "print_mode": [
+   "cylindrical_full"
+  ],
+  "material": {
+   "best": "fiberpart_pa12_g12",
+   "ok": [
+    "fiberpart_pp_g30"
+   ],
+   "unsure": true
+  },
+  "layer_height": [
+   0.1,
+   0.15
+  ],
+  "wall_line_count": [
+   6,
+   6
+  ],
+  "infill_sparse_density": [
+   80,
+   100
+  ],
+  "support_enable_cylindrical": false,
+  "folder_match": "krones|звёзд|звезд|zvezd|star|axis|cam"
+ }
+}
