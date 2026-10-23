@@ -13,6 +13,7 @@ from PyQt5.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 from UM.Application import Application
 from UM.Logger import Logger
 
+from . import voice
 from .agent import config, llm, session as session_module
 
 QML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qml", "ChatWindow.qml")
@@ -26,6 +27,8 @@ class SlicerChat(QObject):
     busyChanged = pyqtSignal()
     attachmentsChanged = pyqtSignal()
     configTested = pyqtSignal(bool, str, arguments=["ok", "text"])
+    voiceChanged = pyqtSignal()
+    voiceText = pyqtSignal(str, arguments=["text"])
 
     def __init__(self, extension, card, parent=None):
         super().__init__(parent)
@@ -35,6 +38,7 @@ class SlicerChat(QObject):
         self._session = None
         self._busy = False
         self._attachments = []
+        self._voice = ""   # "" | "recording" | "transcribing"
         self._event.connect(self._onEvent)
         self._done.connect(self._onDone)
         session_module.LISTENERS.append(self._event.emit)
@@ -62,7 +66,53 @@ class SlicerChat(QObject):
     def attachmentsJson(self):
         return json.dumps(self._attachments, ensure_ascii=False)
 
+    @pyqtProperty(bool, constant=True)
+    def voiceAvailable(self):
+        return voice.is_available()
+
+    @pyqtProperty(str, notify=voiceChanged)
+    def voiceState(self):
+        return self._voice
+
     # ---- actions from QML
+    @pyqtSlot()
+    def toggleVoice(self):
+        """First press starts recording in the plugin (voice.py), second press stops it
+        and transcribes on a worker thread; the text arrives as voiceText."""
+        if self._voice == "transcribing":
+            return
+        try:
+            if self._voice == "":
+                voice.start()
+                self._setVoice("recording")
+                return
+            audio = voice.stop()
+        except Exception as e:
+            self._setVoice("")
+            self._local("error", str(e))
+            return
+        self._setVoice("transcribing")
+
+        def work():
+            try:
+                self._done.emit("voice", json.dumps({"text": voice.transcribe(audio, "audio/wav").get("text", "")}))
+            except Exception as e:
+                self._done.emit("voice", json.dumps({"error": str(e)}))
+        threading.Thread(target=work, daemon=True).start()
+
+    @pyqtSlot()
+    def cancelVoice(self):
+        if self._voice == "recording":
+            try:
+                voice.cancel()
+            except Exception:
+                pass
+            self._setVoice("")
+
+    def _setVoice(self, state):
+        self._voice = state
+        self.voiceChanged.emit()
+
     @pyqtSlot(str)
     def send(self, text):
         session = self._extension.ensureServer().session
@@ -81,7 +131,7 @@ class SlicerChat(QObject):
     def addFiles(self, urls):
         session = self._extension.ensureServer().session
         for url in urls:
-            path = QUrl(url).toLocalFile() if "://" in str(url) else str(url)
+            path = url.toLocalFile() if isinstance(url, QUrl) else (QUrl(url).toLocalFile() if "://" in url else url)
             try:
                 with open(path, "rb") as f:
                     data = base64.b64encode(f.read()).decode("ascii")
@@ -154,6 +204,16 @@ class SlicerChat(QObject):
         self._setBusy(session.busy and event["type"] != "idle")
 
     def _onDone(self, kind, payload):
+        if kind == "voice":
+            data = json.loads(payload)
+            self._setVoice("")
+            if data.get("error"):
+                self._local("error", data["error"])
+            elif data.get("text"):
+                self.voiceText.emit(data["text"])
+            else:
+                self._local("error", "Речь не распознана. Попробуйте ещё раз, ближе к микрофону.")
+            return
         if kind == "test":
             data = json.loads(payload)
             self.configTested.emit(data["ok"], data["text"])

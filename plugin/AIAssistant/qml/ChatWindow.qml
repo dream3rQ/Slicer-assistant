@@ -83,6 +83,7 @@ Window {
         onEventAdded: base.onEvent(JSON.parse(json))
         onCleared: { messages.clear(); callRows = {}; proposalRows = {}; openProposal = ""; thinking = ""; progress = -1 }
         onConfigTested: { settings.status = text; settings.statusOk = ok }
+        onVoiceText: { input.text = (input.text.trim() ? input.text.trim() + " " : "") + text; input.forceActiveFocus() }
     }
 
     ListModel { id: messages }
@@ -204,6 +205,13 @@ Window {
         RowLayout {
             Layout.fillWidth: true
             Button { text: "+"; tooltip: "Приложить STL/OBJ/3MF, фото или ТЗ"; Layout.preferredWidth: 36; onClicked: fileDialog.open() }
+            Button {
+                visible: manager.voiceAvailable
+                text: manager.voiceState === "recording" ? "● Стоп" : manager.voiceState === "transcribing" ? "…" : "Голос"
+                tooltip: "Нажмите и говорите, нажмите ещё раз — текст появится в поле (Esc — отмена)"
+                enabled: manager.voiceState !== "transcribing"
+                onClicked: manager.toggleVoice()
+            }
             TextArea {
                 id: input
                 Layout.fillWidth: true
@@ -214,6 +222,7 @@ Window {
                     base.send(); event.accepted = true;
                 }
                 Keys.onEnterPressed: { base.send(); event.accepted = true }
+                Keys.onEscapePressed: manager.cancelVoice()
             }
             ColumnLayout {
                 Button { text: "Отправить"; visible: !manager.busy || base.openProposal !== ""; onClicked: base.send() }
