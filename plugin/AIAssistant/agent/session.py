@@ -115,6 +115,24 @@ class Session:
         thread = threading.Thread(target=self._run, name="ste-ai-agent", daemon=True)
         thread.start()
 
+    def retry(self):
+        """Run the agent again after an error, without a new user message: the
+        history already ends with the user's request (or tool results). After
+        the step limit it ends with the assistant, so ask it to go on."""
+        with self.lock:
+            if self.busy:
+                raise RuntimeError("Ассистент ещё отвечает на предыдущее сообщение")
+            if not self.messages:
+                raise RuntimeError("Повторять нечего: диалог пуст")
+            self.busy = True
+            self.cancel_requested = False
+        if self.messages[-1].get("role") == "assistant":
+            self.emit("user", {"text": "Продолжи", "attachments": []})
+            self.messages.append({"role": "user", "content": "Продолжи"})
+        else:
+            self.emit("status", {"text": "Повторяю запрос…"})
+        threading.Thread(target=self._run, name="ste-ai-agent", daemon=True).start()
+
     def cancel(self):
         self.cancel_requested = True
 
