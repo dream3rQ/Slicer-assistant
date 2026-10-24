@@ -45,6 +45,7 @@ def mount(name, context, properties=None, in_topbar=False):
     if topbar is None:
         Logger.log("w", "AI Assistant: slicer top bar not found, %s not mounted", name)
         return None
+    load_fonts()
     item = Application.getInstance().createQmlComponent(os.path.join(QML_DIR, name + ".qml"), context)
     if item is None:
         return None
@@ -56,22 +57,27 @@ def mount(name, context, properties=None, in_topbar=False):
     rows.sort(key=lambda r: (abs(r.height() - 30) > 1, -r.x()))
     if rows:
         item.setProperty("orientation", rows[0])
-    family = theme_font_family()
-    if family and item.property("fontFamily") is not None:
-        item.setProperty("fontFamily", family)
     for key, value in (properties or {}).items():
         item.setProperty(key, value)
     return item
 
 
-def theme_font_family():
-    """The family of the slicer theme's default font, so our text matches the
-    rest of the window; "" (the Qt default) when the theme cannot be read."""
-    try:
-        from UM.Qt.Bindings.Theme import Theme
-        return Theme.getInstance().getFont("default").family()
-    except Exception:
-        return ""
+_fonts_loaded = False
+
+
+def load_fonts():
+    """Register the bundled Inter (the designers' font, OFL licence) with Qt once,
+    before our QML is created; qml/Style.qml falls back to the slicer's font
+    when it is missing."""
+    global _fonts_loaded
+    if _fonts_loaded:
+        return
+    _fonts_loaded = True
+    from PyQt5.QtGui import QFontDatabase
+    folder = os.path.join(os.path.dirname(QML_DIR), "fonts")
+    for name in ("Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf"):
+        if QFontDatabase.addApplicationFont(os.path.join(folder, name)) < 0:
+            Logger.log("w", "AI Assistant: font %s not loaded", name)
 
 
 class SlicerUI(QObject):

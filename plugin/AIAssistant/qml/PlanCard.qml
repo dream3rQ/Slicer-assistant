@@ -1,40 +1,29 @@
-// The plan card over the 3D view, next to the Stereo Agent panel.
+// The plan card over the 3D view, left of the Stereo Agent panel, after the
+// designers' Figma mock-up (sizes ×1: the mock-up draws it at 0.82).
 // Data: manager.proposalJson (items with group, current, proposed, options,
-// unit, type, reason, warning/error; see docs/plan-card.md). Buttons call
-// manager.answer(action, overridesJson, skipJson, text). Designers restyle
-// this file; the manager calls are the contract.
+// unit, type, minimum/maximum, reason, warning/error; see docs/plan-card.md).
+// Buttons call manager.answer(action, overridesJson, skipJson, text); the
+// manager calls are the contract.
 import QtQuick 2.7
 import QtQuick.Controls 1.4
 import QtQuick.Controls.Styles 1.4
 
-Rectangle {
+Item {
     id: base
-
-    // ---- type: the slicer theme's font (set by slicer_ui.mount) and one size scale
-    property string fontFamily: Qt.application.font.family
-    readonly property var fs: ({ tiny: 10, small: 11, caption: 12, body: 13, title: 14, heading: 16 })
     property var topbar: null
     property var panel: null
     property var proposal: JSON.parse(manager.proposalJson)
-    property bool explain: false   // the "?" button: reasons and current values under each row
+    property bool explain: false   // the "?" button: reasons and previous values under the rows
+    property int errors: 0         // rows whose value is out of range; "Применить" waits for them
+    Style { id: st }
 
-    readonly property color blue: "#1E6FD9"
-    readonly property color blueLine: "#BBD7F5"
-    readonly property color ink: "#16212C"
-    readonly property color muted: "#8A94A3"
-
-    width: 470
-    x: (panel && panel.visible ? panel.x : (parent ? parent.width : 800)) - width - 16
-    y: topbar ? topbar.y + topbar.height + 12 : 12
-    height: Math.min(column.implicitHeight + 2, (parent ? parent.height : 800) - y - 24)
+    width: 540
+    x: (panel && panel.visible ? panel.x : (parent ? parent.width : 800)) - width - 7
+    y: topbar ? topbar.y + topbar.height + 7 : 7
+    height: Math.min(column.implicitHeight + 2, (parent ? parent.height : 800) - y - 16)
     z: 60
     visible: false
-    radius: 14
-    color: "white"
-    border.color: blueLine
-    onProposalChanged: explain = false
-
-    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: wheel.accepted = false }
+    onProposalChanged: { explain = false; errors = 0 }
 
     function num(v) {
         if (typeof v !== "number") return v;
@@ -49,7 +38,13 @@ Rectangle {
         if (v === false) return "нет";
         return num(v) + (item.unit ? " " + item.unit : "");
     }
+    function countErrors() {
+        var n = 0;
+        for (var i = 0; i < rows.count; i++) if (rows.itemAt(i) && rows.itemAt(i).rangeError !== "") n++;
+        errors = n;
+    }
     function apply() {
+        if (errors > 0) return;
         var overrides = {};
         for (var i = 0; i < rows.count; i++) {
             var row = rows.itemAt(i);
@@ -59,9 +54,16 @@ Rectangle {
         manager.answer("apply", JSON.stringify(overrides), "[]", "");
     }
 
+    // glow and frame
+    Rectangle { anchors.fill: parent; anchors.margins: -4; radius: 15; color: Qt.rgba(39 / 255, 140 / 255, 226 / 255, 0.06) }
+    Rectangle { anchors.fill: parent; anchors.margins: -2; radius: 13; color: Qt.rgba(39 / 255, 140 / 255, 226 / 255, 0.08) }
+    Rectangle { anchors.fill: parent; radius: 10.75; color: "white"; border.color: st.borderAccent; border.width: 1.2 }
+
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: wheel.accepted = false }
+
     Flickable {
         anchors.fill: parent
-        anchors.margins: 1
+        anchors.margins: 1.2
         contentHeight: column.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -70,199 +72,237 @@ Rectangle {
             id: column
             width: parent.width
 
-            Item {  // header: the "?" toggles explanations
+            Item {  // header: only the "?" — it shows why each value is proposed
                 width: parent.width
                 height: 46
-                Text { x: 20; anchors.verticalCenter: parent.verticalCenter; text: "Предлагаемые изменения"; color: base.ink; font.family: base.fontFamily; font.pixelSize: base.fs.body; font.bold: true }
-                Rectangle {
-                    anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                    width: 24; height: 24; radius: 12
-                    color: base.explain ? base.blue : "transparent"
-                    border.color: base.explain ? base.blue : "#5A6878"; border.width: 1.5
-                    Text { anchors.centerIn: parent; text: "?"; color: base.explain ? "white" : "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.body; font.bold: true }
+                Item {
+                    anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
+                    width: 30; height: 30
+                    Rectangle { anchors.fill: parent; radius: 15; color: base.explain ? st.accentSoft : "transparent" }
+                    Icon { anchors.centerIn: parent; name: "circle_help"; width: 20; height: 20 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: base.explain = !base.explain }
                 }
-                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: base.blueLine }
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: st.border }
             }
 
-            Item { width: 1; height: 12 }
+            Item {
+                x: 16
+                width: parent.width - 32
+                height: body.implicitHeight + 32
 
-            Row {  // column titles
-                x: 20
-                spacing: 0
-                Text { width: 170; text: "ПАРАМЕТР"; color: base.muted; font.family: base.fontFamily; font.pixelSize: base.fs.tiny }
-                Text { width: 120; text: "РЕКОМЕНДАЦИЯ"; color: base.muted; font.family: base.fontFamily; font.pixelSize: base.fs.tiny }
-                Text { text: "ВАШЕ ЗНАЧЕНИЕ"; color: base.muted; font.family: base.fontFamily; font.pixelSize: base.fs.tiny }
-            }
+                Column {
+                    id: body
+                    y: 16
+                    width: parent.width
 
-            Item { width: 1; height: 6 }
-
-            Repeater {
-                id: rows
-                model: base.proposal.items
-
-                delegate: Column {
-                    id: row
-                    property var item: modelData
-                    property bool firstInGroup: index === 0 || base.proposal.items[index - 1].group !== item.group
-                    property bool hasOptions: !!(item.options && item.options.length) || item.type === "bool"
-                    property var choices: item.options && item.options.length ? item.options
-                                         : [{ value: true, label: "да" }, { value: false, label: "нет" }]
-                    property bool userChanged: false
-                    function edited() {
-                        if (hasOptions) return choices[combo.currentIndex].value;
-                        var t = field.text.replace(",", ".").trim();
-                        if (item.type === "int") return parseInt(t, 10);
-                        if (item.type === "float") return parseFloat(t);
-                        return field.text;
-                    }
-                    function step(sign) {
-                        var v = parseFloat(field.text.replace(",", ".")) || 0;
-                        var d = item.type === "int" ? 1 : (Math.abs(v) < 1 ? 0.01 : (Math.abs(v) < 10 ? 0.1 : 1));
-                        v = Math.round((v + sign * d) * 100) / 100;
-                        if (item.minimum !== undefined && v < item.minimum) v = item.minimum;
-                        if (item.maximum !== undefined && v > item.maximum) v = item.maximum;
-                        field.text = base.num(v);
-                    }
-                    width: column.width
-
-                    Rectangle {  // section title
-                        visible: row.firstInGroup
-                        x: 16; width: parent.width - 32; height: visible ? 26 : 0
-                        color: "#F4F6F9"
-                        Text { x: 6; anchors.verticalCenter: parent.verticalCenter; text: (row.item.group || "").toUpperCase(); color: "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.tiny; font.bold: true }
+                    Row {  // column titles
+                        height: 24
+                        spacing: 8
+                        Text { width: body.width - 170 - 130 - 16; anchors.verticalCenter: parent.verticalCenter; leftPadding: 2; text: "ПАРАМЕТР"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
+                        Text { width: 130; anchors.verticalCenter: parent.verticalCenter; text: "РЕКОМЕНДАЦИЯ"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
+                        Text { width: 170; anchors.verticalCenter: parent.verticalCenter; text: "ВАШЕ ЗНАЧЕНИЕ"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
                     }
 
-                    Item {
-                        width: parent.width
-                        height: 38
-                        readonly property bool differs: !row.item.unchanged
+                    Repeater {
+                        id: rows
+                        model: base.proposal.items
 
-                        Text {
-                            x: 22; width: 160
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: row.item.label
-                            elide: Text.ElideRight
-                            color: row.item.error ? "#B42318" : base.ink
-                            font.family: base.fontFamily; font.pixelSize: base.fs.caption
-                            font.bold: row.userChanged
-                        }
-                        Text {
-                            x: 190; width: 112
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: base.fmt(row.item, row.item.proposed)
-                            elide: Text.ElideRight
-                            color: parent.differs ? base.blue : base.muted
-                            font.family: base.fontFamily; font.pixelSize: base.fs.caption
-                        }
-
-                        Rectangle {  // "your value": number field with unit and arrows, or a list
-                            x: 306; width: parent.width - x - 16; height: 30
-                            anchors.verticalCenter: parent.verticalCenter
-                            radius: 6
-                            border.color: parent.differs || row.userChanged ? base.blueLine : "#E3E8EF"
-
-                            TextInput {
-                                id: field
-                                visible: !row.hasOptions
-                                x: 10; width: parent.width - 70
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: row.item.proposed === null || row.item.proposed === undefined ? "" : base.num(row.item.proposed)
-                                color: parent.parent.differs || row.userChanged ? base.blue : base.ink
-                                font.family: base.fontFamily; font.pixelSize: base.fs.body
-                                selectByMouse: true
-                                clip: true
-                                onTextChanged: row.userChanged = String(row.edited()) !== String(row.item.proposed)
+                        delegate: Column {
+                            id: row
+                            property var item: modelData
+                            property bool firstInGroup: index === 0 || base.proposal.items[index - 1].group !== item.group
+                            property bool hasOptions: !!(item.options && item.options.length) || item.type === "bool"
+                            property bool numeric: item.type === "int" || item.type === "float"
+                            property var choices: item.options && item.options.length ? item.options
+                                                 : [{ value: true, label: "да" }, { value: false, label: "нет" }]
+                            property bool userChanged: false
+                            readonly property bool differs: !item.unchanged || userChanged
+                            // the value typed in is outside the setting's limits
+                            property string rangeError: {
+                                if (!numeric || hasOptions) return "";
+                                var t = field.text.replace(",", ".").trim();
+                                var v = parseFloat(t);
+                                var u = item.unit ? " " + item.unit : "";
+                                var lo = item.minimum, hi = item.maximum;
+                                var limits = lo !== undefined && hi !== undefined ? "от " + base.num(lo) + " до " + base.num(hi) + u
+                                           : lo !== undefined ? "не меньше " + base.num(lo) + u
+                                           : hi !== undefined ? "не больше " + base.num(hi) + u : "";
+                                if (t === "" || isNaN(v)) return "Введите число" + (limits ? " " + limits : "") + ".";
+                                if ((lo !== undefined && v < lo) || (hi !== undefined && v > hi))
+                                    return "Введите значение " + limits + ". Сейчас указано " + base.num(v) + u + ".";
+                                return "";
                             }
-                            Text {
-                                visible: !row.hasOptions
-                                anchors.right: arrows.left; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
-                                text: row.item.unit || ""
-                                color: base.muted
-                                font.family: base.fontFamily; font.pixelSize: base.fs.small
+                            onRangeErrorChanged: base.countErrors()
+                            readonly property string problem: rangeError || item.error || ""
+
+                            function edited() {
+                                if (hasOptions) return choices[combo.currentIndex].value;
+                                var t = field.text.replace(",", ".").trim();
+                                if (item.type === "int") return parseInt(t, 10);
+                                if (item.type === "float") return parseFloat(t);
+                                return field.text;
                             }
-                            Column {
-                                id: arrows
-                                visible: !row.hasOptions && (row.item.type === "int" || row.item.type === "float")
-                                anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
-                                Text { text: "▴"; color: "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.tiny; MouseArea { anchors.fill: parent; anchors.margins: -2; onClicked: row.step(1) } }
-                                Text { text: "▾"; color: "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.tiny; MouseArea { anchors.fill: parent; anchors.margins: -2; onClicked: row.step(-1) } }
+                            function step(sign) {
+                                var v = parseFloat(field.text.replace(",", ".")) || 0;
+                                var d = item.type === "int" ? 1 : (Math.abs(v) < 1 ? 0.01 : (Math.abs(v) < 10 ? 0.1 : 1));
+                                v = Math.round((v + sign * d) * 100) / 100;
+                                if (item.minimum !== undefined && v < item.minimum) v = item.minimum;
+                                if (item.maximum !== undefined && v > item.maximum) v = item.maximum;
+                                field.text = base.num(v);
+                            }
+                            width: body.width
+
+                            Rectangle {  // section title
+                                visible: row.firstInGroup
+                                width: parent.width; height: visible ? 19 : 0
+                                color: st.groupBg
+                                Text { x: 7; anchors.verticalCenter: parent.verticalCenter; text: (row.item.group || "").toUpperCase(); color: st.textSecondary; font.family: st.family; font.pixelSize: 9; font.weight: Font.DemiBold }
                             }
 
-                            ComboBox {
-                                id: combo
-                                visible: row.hasOptions
-                                anchors.fill: parent
-                                model: row.choices.map(function (o) { return o.label })
-                                currentIndex: {
-                                    for (var i = 0; i < row.choices.length; i++)
-                                        if (String(row.choices[i].value) === String(row.item.proposed)) return i;
-                                    return 0;
+                            Row {
+                                height: 34
+                                spacing: 8
+
+                                Text {
+                                    width: body.width - 170 - 130 - 16
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    leftPadding: 2
+                                    text: row.item.label
+                                    elide: Text.ElideRight
+                                    color: st.textPrimary
+                                    font.family: st.family; font.pixelSize: 11
+                                    font.weight: row.problem !== "" ? Font.DemiBold : Font.Normal
                                 }
-                                onActivated: row.userChanged = String(row.choices[index].value) !== String(row.item.proposed)
-                                style: ComboBoxStyle {
-                                    background: Rectangle { radius: 6; color: "white"; border.color: "transparent" }
-                                    label: Text {
-                                        text: control.currentText
-                                        color: (!row.item.unchanged || row.userChanged) ? base.blue : base.ink
-                                        font.family: base.fontFamily; font.pixelSize: base.fs.body
-                                        verticalAlignment: Text.AlignVCenter
-                                        elide: Text.ElideRight
+                                Text {
+                                    width: 130
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: base.fmt(row.item, row.item.proposed)
+                                    elide: Text.ElideRight
+                                    color: row.item.unchanged ? st.textSecondary : st.accent
+                                    font.family: st.family; font.pixelSize: 11
+                                }
+
+                                Rectangle {  // "your value": a number with its unit and ↕, or a list with ⌄
+                                    width: 170; height: 30
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    radius: 5
+                                    color: "white"
+                                    border.width: 1
+                                    border.color: row.problem !== "" ? st.danger : row.differs ? st.borderAccent : st.border
+                                    readonly property color valueColor: row.problem !== "" ? st.danger : row.differs ? st.accent : st.textPrimary
+
+                                    TextInput {
+                                        id: field
+                                        visible: !row.hasOptions
+                                        x: 9; width: parent.width - 9 - unit.width - 34
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: row.item.proposed === null || row.item.proposed === undefined ? "" : base.num(row.item.proposed)
+                                        color: parent.valueColor
+                                        font.family: st.family; font.pixelSize: 12; font.weight: Font.Medium
+                                        selectByMouse: true
+                                        clip: true
+                                        onTextChanged: row.userChanged = String(row.edited()) !== String(row.item.proposed)
+                                        Keys.onUpPressed: row.step(1)
+                                        Keys.onDownPressed: row.step(-1)
+                                    }
+                                    Text {
+                                        id: unit
+                                        visible: !row.hasOptions
+                                        anchors.right: parent.right; anchors.rightMargin: row.numeric ? 26 : 9
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: row.item.unit || ""
+                                        color: st.textSecondary
+                                        font.family: st.family; font.pixelSize: 11
+                                    }
+                                    Item {  // ↕: the top half adds a step, the bottom half takes one away
+                                        visible: !row.hasOptions && row.numeric
+                                        anchors.right: parent.right; anchors.rightMargin: 4
+                                        width: 20; height: parent.height
+                                        Icon { anchors.centerIn: parent; name: "chevrons_up_down"; width: 12; height: 12 }
+                                        MouseArea { width: parent.width; height: parent.height / 2; cursorShape: Qt.PointingHandCursor; onClicked: row.step(1) }
+                                        MouseArea { y: parent.height / 2; width: parent.width; height: parent.height / 2; cursorShape: Qt.PointingHandCursor; onClicked: row.step(-1) }
+                                    }
+
+                                    ComboBox {
+                                        id: combo
+                                        visible: row.hasOptions
+                                        anchors.fill: parent
+                                        model: row.choices.map(function (o) { return o.label })
+                                        currentIndex: {
+                                            for (var i = 0; i < row.choices.length; i++)
+                                                if (String(row.choices[i].value) === String(row.item.proposed)) return i;
+                                            return 0;
+                                        }
+                                        onActivated: row.userChanged = String(row.choices[index].value) !== String(row.item.proposed)
+                                        style: ComboBoxStyle {
+                                            background: Item {
+                                                Icon { anchors.right: parent.right; anchors.rightMargin: 9; anchors.verticalCenter: parent.verticalCenter; name: "chevron_down"; width: 12; height: 12 }
+                                            }
+                                            label: Text {
+                                                leftPadding: 3
+                                                text: control.currentText
+                                                color: row.differs ? st.accent : st.textPrimary
+                                                font.family: st.family; font.pixelSize: 12; font.weight: Font.Medium
+                                                verticalAlignment: Text.AlignVCenter
+                                                elide: Text.ElideRight
+                                            }
+                                        }
                                     }
                                 }
                             }
+
+                            Text {  // the error under the row (mock-up frame 4)
+                                visible: row.problem !== ""
+                                width: parent.width
+                                height: visible ? Math.max(24, implicitHeight + 8) : 0
+                                leftPadding: 2
+                                verticalAlignment: Text.AlignVCenter
+                                wrapMode: Text.Wrap
+                                text: row.problem
+                                color: st.danger
+                                font.family: st.family; font.pixelSize: 11
+                            }
+                            Text {  // "?": why, what it was; warnings always
+                                visible: row.problem === "" && (base.explain || !!row.item.warning)
+                                width: parent.width
+                                height: visible ? implicitHeight + 6 : 0
+                                leftPadding: 2
+                                wrapMode: Text.Wrap
+                                font.family: st.family; font.pixelSize: 11
+                                color: row.item.warning && !base.explain ? st.warning : st.textSecondary
+                                text: {
+                                    var parts = [];
+                                    if (base.explain && row.item.reason) parts.push(row.item.reason);
+                                    if (base.explain && !row.item.unchanged) parts.push("было: " + base.fmt(row.item, row.item.current));
+                                    if (row.item.warning) parts.push(row.item.warning);
+                                    return parts.join(" · ");
+                                }
+                            }
                         }
                     }
 
-                    Text {  // explanation: why, what it was, warnings
-                        visible: base.explain || !!row.item.error || !!row.item.warning
-                        x: 22; width: parent.width - 44
-                        height: visible ? implicitHeight + 6 : 0
-                        wrapMode: Text.Wrap
-                        font.family: base.fontFamily; font.pixelSize: base.fs.small
-                        color: row.item.error ? "#B42318" : (row.item.warning && !base.explain ? "#9A6A00" : base.muted)
-                        text: {
-                            var parts = [];
-                            if (base.explain && row.item.reason) parts.push(row.item.reason);
-                            if (base.explain && !row.item.unchanged) parts.push("было: " + base.fmt(row.item, row.item.current));
-                            if (row.item.error) parts.push(row.item.error);
-                            else if (row.item.warning) parts.push(row.item.warning);
-                            return parts.join(" · ");
+                    Item { width: 1; height: 22 }
+
+                    Row {  // footer
+                        anchors.right: parent.right
+                        spacing: 10
+                        Rectangle {  // not in the mock-up: without it the agent would wait for an answer
+                            width: rejectText.implicitWidth + 32; height: 52; radius: 8
+                            color: "white"; border.color: st.border; border.width: 1
+                            opacity: rejectArea.pressed ? 0.75 : 1
+                            Text { id: rejectText; anchors.centerIn: parent; text: "Отклонить"; color: st.textPrimary; font.family: st.family; font.pixelSize: 15; font.weight: Font.DemiBold }
+                            MouseArea { id: rejectArea; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.answer("reject", "{}", "[]", "") }
+                        }
+                        Rectangle {
+                            width: 213; height: 52; radius: 8
+                            color: st.accent
+                            opacity: base.errors > 0 ? 0.45 : applyArea.pressed ? 0.8 : 1
+                            Text { anchors.centerIn: parent; text: "Применить изменения"; color: "white"; font.family: st.family; font.pixelSize: 15; font.weight: Font.DemiBold }
+                            MouseArea { id: applyArea; anchors.fill: parent; cursorShape: base.errors > 0 ? Qt.ForbiddenCursor : Qt.PointingHandCursor; onClicked: base.apply() }
                         }
                     }
                 }
             }
-
-            Item { width: 1; height: 16 }
-
-            Item {  // footer
-                width: parent.width
-                height: 52
-                Text {
-                    x: 22; width: 160
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Вопрос или правку можно написать в чат"
-                    wrapMode: Text.Wrap
-                    color: base.muted
-                    font.family: base.fontFamily; font.pixelSize: base.fs.tiny
-                }
-                Text {
-                    anchors.right: applyButton.left; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                    text: "Отклонить"
-                    color: "#5A6878"
-                    font.family: base.fontFamily; font.pixelSize: base.fs.caption
-                    MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: manager.answer("reject", "{}", "[]", "") }
-                }
-                Rectangle {
-                    id: applyButton
-                    anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                    width: 190; height: 44; radius: 10
-                    color: applyArea.pressed ? "#1659B0" : base.blue
-                    Text { anchors.centerIn: parent; text: "Применить изменения"; color: "white"; font.family: base.fontFamily; font.pixelSize: base.fs.title; font.bold: true }
-                    MouseArea { id: applyArea; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: base.apply() }
-                }
-            }
-            Item { width: 1; height: 12 }
         }
     }
 }

@@ -25,6 +25,7 @@ class AIAssistant(Extension):
         self.addMenuItem("Open chat", self.showChat)
         self.addMenuItem("Open chat in browser", self.showChatInBrowser)
         self.addMenuItem("New conversation", self.newConversation)
+        self.addMenuItem("Settings", self._chat.openSettings)
         Application.getInstance().engineCreatedSignal.connect(self._chat.mountUi)
 
     def ensureServer(self):

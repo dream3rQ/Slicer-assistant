@@ -21,6 +21,23 @@ MODE_HINTS = {"3D": "Режим печати: 3D (classic), выбран пол�
               "5D": "Режим печати: 5D, выбран пользователем; Spiral или полный 5D выбери по детали."}
 
 
+def saved_line(result):
+    """The "file saved" line under a tool call that wrote files (mock-up frame 6):
+    {"saved": text, "saved_dir": folder to open on click}, or {} for other tools."""
+    if not isinstance(result, dict):
+        return {}
+    folder = result.get("folder")
+    if folder:
+        names = [n for n, key in (("project.3mf", "project_3mf_bytes"), ("result.gcode", "gcode_bytes")) if result.get(key)]
+        what = " и ".join(names) or "Результаты"
+        return {"saved": "%s %s в %s" % (what, "сохранены" if len(names) != 1 else "сохранён", folder), "saved_dir": folder}
+    path = result.get("path")
+    if isinstance(path, str) and os.path.splitext(path)[1].lower() in (".3mf", ".gcode"):
+        return {"saved": "%s сохранён в %s" % (os.path.basename(path), os.path.dirname(path)),
+                "saved_dir": os.path.dirname(path)}
+    return {}
+
+
 class SlicerChat(QObject):
     _event = pyqtSignal(object, object)   # worker thread -> main thread
     _done = pyqtSignal(str, str)          # (kind, json) results of background calls
@@ -28,6 +45,7 @@ class SlicerChat(QObject):
     cleared = pyqtSignal()
     busyChanged = pyqtSignal()
     attachmentsChanged = pyqtSignal()
+    settingsRequested = pyqtSignal()
     configTested = pyqtSignal(bool, str, arguments=["ok", "text"])
     voiceChanged = pyqtSignal()
     voiceText = pyqtSignal(str, arguments=["text"])
@@ -50,7 +68,7 @@ class SlicerChat(QObject):
         """Called once the slicer's main window exists: the top bar button, and
         the panel itself if it was open when the slicer was closed."""
         if self._button is None:
-            self._button = mount("AgentButton", {"manager": self}, in_topbar=True)
+            self._button = mount("AgentButton", {"manager": self})
         if config.get("panel_open"):
             self.show()
 
@@ -95,6 +113,20 @@ class SlicerChat(QObject):
     @pyqtProperty(str, notify=attachmentsChanged)
     def attachmentsJson(self):
         return json.dumps(self._attachments, ensure_ascii=False)
+
+    @pyqtSlot()
+    def retry(self):
+        server = self._extension.ensureServer()
+        try:
+            server.session.retry()
+        except Exception as e:
+            self._local("error", str(e))
+
+    @pyqtSlot()
+    def openSettings(self):
+        """Extensions → AI Assistant → Settings: the settings window lives in the panel's QML."""
+        if self.show():
+            self.settingsRequested.emit()
 
     @pyqtProperty(int, constant=True)
     def panelWidth(self):
@@ -264,6 +296,8 @@ class SlicerChat(QObject):
             data["html"] = markdown_html(data.get("text"))
         elif kind == "tool_result":
             data["summary"] = summarize(data.get("name"), data.get("result"))
+            if data.get("ok"):
+                data.update(saved_line(data.get("result")))
             data["details"] = json.dumps(data.get("result"), ensure_ascii=False, indent=1)[:4000]
             data.pop("result", None)
         elif kind == "tool_call":
