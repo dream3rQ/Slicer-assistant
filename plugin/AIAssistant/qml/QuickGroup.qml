@@ -42,17 +42,28 @@ Rectangle {
             visible: group.expanded
             width: parent.width
             Repeater {
-                model: group.expanded ? group.prompts : []
+                model: group.prompts
                 delegate: Rectangle {
+                    // Highlighted only after the mouse really moved over the row: in Qt 5.10 rows that
+                    // appear under a hover-enabled area report containsMouse before any mouse move.
+                    property bool hovered: false
                     width: parent.width; height: 22; radius: 4
-                    color: area.containsMouse ? st.accentSoft : "transparent"
+                    color: hovered ? st.accentSoft : "transparent"
                     Text {
                         x: 6; anchors.verticalCenter: parent.verticalCenter
                         text: modelData.label
-                        color: area.containsMouse ? st.accent : st.textSecondary
+                        color: parent.hovered ? st.accent : st.textSecondary
                         font.family: st.family; font.pixelSize: 11
                     }
-                    MouseArea { id: area; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: group.picked(modelData.text) }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onPositionChanged: parent.hovered = true
+                        onExited: parent.hovered = false
+                        onClicked: group.picked(modelData.text)
+                    }
+                    Connections { target: group; onExpandedChanged: hovered = false }
                 }
             }
         }

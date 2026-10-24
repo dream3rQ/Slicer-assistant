@@ -18,7 +18,7 @@ from .slicer_ui import mount
 
 # The 3D / 5D chips under the input: an explicit choice the agent must follow (see prompt.py).
 # The hint goes to the LLM only; the chat shows the chip.
-SILENCE_PAUSE_SEC = 4.0   # dictation ends by itself after this long without speech
+SILENCE_PAUSE_SEC = 2.5   # dictation ends by itself after this long without speech
 
 MODE_HINTS = {"3D": "Режим печати: 3D (classic), выбран пользователем.",
               "5D": "Режим печати: 5D, выбран пользователем; Spiral или полный 5D выбери по детали."}

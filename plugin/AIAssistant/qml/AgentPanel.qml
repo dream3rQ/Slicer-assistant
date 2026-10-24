@@ -565,7 +565,7 @@ Rectangle {
                             spinning: manager.voiceState === "transcribing"
                             fill: manager.voiceState === "recording" ? st.danger : st.micBg
                             fg: manager.voiceState === "recording" ? "white" : st.textInk
-                            tip: manager.voiceState === "recording" ? "Остановить запись (сама остановится после паузы в 4 секунды)" : "Голос: нажмите и говорите. Запись остановится после паузы в 4 секунды, текст появится в поле (Esc — отмена)"
+                            tip: manager.voiceState === "recording" ? "Остановить запись (сама остановится после паузы в 2,5 секунды)" : "Голос: нажмите и говорите. Запись остановится после паузы в 2,5 секунды, текст появится в поле (Esc — отмена)"
                             onClicked: manager.toggleVoice()
                         }
                     }
