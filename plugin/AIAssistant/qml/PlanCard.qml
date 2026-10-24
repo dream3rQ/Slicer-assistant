@@ -17,10 +17,14 @@ Item {
     property int errors: 0         // rows whose value is out of range; "Применить" waits for them
     Style { id: st }
 
-    width: 540
+    // Placed left of the panel until the user drags it by the header; then it stays where it was put.
+    readonly property int colNow: 100
+    readonly property int colRec: 120
+    readonly property int colYours: 170
+    width: 600
     x: (panel && panel.visible ? panel.x : (parent ? parent.width : 800)) - width - 7
     y: topbar ? topbar.y + topbar.height + 7 : 7
-    height: Math.min(column.implicitHeight + 2, (parent ? parent.height : 800) - y - 16)
+    height: Math.min(header.height + column.implicitHeight + 3, (parent ? parent.height : 800) - y - 16)
     z: 60
     visible: false
     onProposalChanged: { explain = false; errors = 0 }
@@ -61,9 +65,46 @@ Item {
 
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: wheel.accepted = false }
 
+    Item {  // header: drag to move the card; the "?" shows why each value is proposed
+        id: header
+        x: 1.2; y: 1.2
+        width: parent.width - 2.4
+        z: 2
+        height: 46
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+            drag.target: base
+            drag.minimumX: 0
+            drag.maximumX: base.parent ? base.parent.width - base.width : 0
+            drag.minimumY: base.topbar ? base.topbar.y + base.topbar.height : 0
+            drag.maximumY: base.parent ? base.parent.height - 60 : 0
+        }
+        Grid {  // grip
+            x: 18; anchors.verticalCenter: parent.verticalCenter
+            columns: 3; spacing: 3
+            Repeater { model: 6; Rectangle { width: 3; height: 3; radius: 1.5; color: st.iconMuted } }
+        }
+        Text {
+            x: 40; anchors.verticalCenter: parent.verticalCenter
+            text: "Изменения настроек"
+            color: st.textSecondary
+            font.family: st.family; font.pixelSize: 11
+        }
+        Item {
+            anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
+            width: 30; height: 30
+            Rectangle { anchors.fill: parent; radius: 15; color: base.explain ? st.accentSoft : "transparent" }
+            Icon { anchors.centerIn: parent; name: "circle_help"; width: 20; height: 20 }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: base.explain = !base.explain }
+        }
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: st.border }
+    }
+
     Flickable {
         anchors.fill: parent
         anchors.margins: 1.2
+        anchors.topMargin: header.height + 1.2
         contentHeight: column.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -71,19 +112,6 @@ Item {
         Column {
             id: column
             width: parent.width
-
-            Item {  // header: only the "?" — it shows why each value is proposed
-                width: parent.width
-                height: 46
-                Item {
-                    anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
-                    width: 30; height: 30
-                    Rectangle { anchors.fill: parent; radius: 15; color: base.explain ? st.accentSoft : "transparent" }
-                    Icon { anchors.centerIn: parent; name: "circle_help"; width: 20; height: 20 }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: base.explain = !base.explain }
-                }
-                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: st.border }
-            }
 
             Item {
                 x: 16
@@ -98,9 +126,10 @@ Item {
                     Row {  // column titles
                         height: 24
                         spacing: 8
-                        Text { width: body.width - 170 - 130 - 16; anchors.verticalCenter: parent.verticalCenter; leftPadding: 2; text: "ПАРАМЕТР"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
-                        Text { width: 130; anchors.verticalCenter: parent.verticalCenter; text: "РЕКОМЕНДАЦИЯ"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
-                        Text { width: 170; anchors.verticalCenter: parent.verticalCenter; text: "ВАШЕ ЗНАЧЕНИЕ"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
+                        Text { width: body.width - base.colNow - base.colRec - base.colYours - 24; anchors.verticalCenter: parent.verticalCenter; leftPadding: 2; text: "ПАРАМЕТР"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
+                        Text { width: base.colNow; anchors.verticalCenter: parent.verticalCenter; text: "СЕЙЧАС"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
+                        Text { width: base.colRec; anchors.verticalCenter: parent.verticalCenter; text: "РЕКОМЕНДАЦИЯ"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
+                        Text { width: base.colYours; anchors.verticalCenter: parent.verticalCenter; text: "ВАШЕ ЗНАЧЕНИЕ"; color: st.textSecondary; font.family: st.family; font.pixelSize: 10 }
                     }
 
                     Repeater {
@@ -164,7 +193,7 @@ Item {
                                 spacing: 8
 
                                 Text {
-                                    width: body.width - 170 - 130 - 16
+                                    width: body.width - base.colNow - base.colRec - base.colYours - 24
                                     anchors.verticalCenter: parent.verticalCenter
                                     leftPadding: 2
                                     text: row.item.label
@@ -173,17 +202,26 @@ Item {
                                     font.family: st.family; font.pixelSize: 11
                                     font.weight: row.problem !== "" ? Font.DemiBold : Font.Normal
                                 }
-                                Text {
-                                    width: 130
+                                Text {  // what the slicer has now
+                                    width: base.colNow
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: base.fmt(row.item, row.item.proposed)
+                                    text: base.fmt(row.item, row.item.current)
+                                    elide: Text.ElideRight
+                                    color: st.textSecondary
+                                    font.family: st.family; font.pixelSize: 11
+                                }
+                                Text {  // what the assistant proposes; "оставить" when it is the same
+                                    width: base.colRec
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: row.item.unchanged ? "оставить" : base.fmt(row.item, row.item.proposed)
                                     elide: Text.ElideRight
                                     color: row.item.unchanged ? st.textSecondary : st.accent
                                     font.family: st.family; font.pixelSize: 11
+                                    font.weight: row.item.unchanged ? Font.Normal : Font.Medium
                                 }
 
                                 Rectangle {  // "your value": a number with its unit and ↕, or a list with ⌄
-                                    width: 170; height: 30
+                                    width: base.colYours; height: 30
                                     anchors.verticalCenter: parent.verticalCenter
                                     radius: 5
                                     color: "white"
@@ -273,7 +311,6 @@ Item {
                                 text: {
                                     var parts = [];
                                     if (base.explain && row.item.reason) parts.push(row.item.reason);
-                                    if (base.explain && !row.item.unchanged) parts.push("было: " + base.fmt(row.item, row.item.current));
                                     if (row.item.warning) parts.push(row.item.warning);
                                     return parts.join(" · ");
                                 }

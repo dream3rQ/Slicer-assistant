@@ -334,7 +334,7 @@ class SlicerChat(QObject):
     def _forward(self, event):
         data = dict(event.get("data") or {})
         kind = event["type"]
-        if kind in ("assistant",):
+        if kind in ("assistant", "note"):
             data["html"] = markdown_html(data.get("text"))
         elif kind == "tool_result":
             data["summary"] = summarize(data.get("name"), data.get("result"))

@@ -134,6 +134,9 @@ class _Recorder(object):
                 box["error"] = e if isinstance(e, VoiceError) else VoiceError("Ошибка записи звука: %s" % e)
             done.set()
 
+    # (samples per second, channels); (0, 0) = the device's own default format
+    FORMATS = ((16000, 1), (44100, 1), (48000, 1), (44100, 2), (48000, 2), (0, 0))
+
     def _mci(self, command):
         import ctypes
         out = ctypes.create_unicode_buffer(256)
@@ -161,19 +164,26 @@ class _Recorder(object):
         def job():
             if self._started is not None:
                 return
-            self._close()
-            self._mci("open new type waveaudio alias " + self.ALIAS)
-            try:
-                self._mci("set %s time format ms bitspersample 16 channels 1 samplespersec 16000 "
-                          "bytespersec 32000 alignment 2" % self.ALIAS)
-            except VoiceError:
-                pass  # the device default (11 kHz mono) is still fine for speech
-            try:
-                self._mci("record " + self.ALIAS)
-            except VoiceError:
+            # Some drivers refuse 16 kHz mono with MCI error 328 ("no installed
+            # wave device can record files in the current format"), so try the
+            # formats a microphone is likely to support, smallest first.
+            error = None
+            for rate, channels in self.FORMATS:
                 self._close()
-                raise
-            self._started = time.time()
+                self._mci("open new type waveaudio alias " + self.ALIAS)
+                try:
+                    if rate:
+                        align = 2 * channels
+                        self._mci("set %s time format ms bitspersample 16 channels %d samplespersec %d "
+                                  "bytespersec %d alignment %d" % (self.ALIAS, channels, rate, rate * align, align))
+                    self._mci("record " + self.ALIAS)
+                except VoiceError as e:
+                    error = e
+                    continue
+                self._started = time.time()
+                return
+            self._close()
+            raise error
 
         self._run(job)
         self._arm_timer()

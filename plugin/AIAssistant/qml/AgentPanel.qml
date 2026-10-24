@@ -99,8 +99,10 @@ Rectangle {
             addRow({ kind: "user", text: d.text || "", extra: modeLabel, files: files }); break;
         case "assistant":
             addRow({ kind: "assistant", text: d.html || "" }); break;
-        case "note": case "status":
-            addRow({ kind: "note", text: d.text || "" }); break;
+        case "note":   // the agent's words between tool calls: markdown like an answer
+            addRow({ kind: "note", text: d.html || d.text || "" }); break;
+        case "status":
+            addRow({ kind: "status", text: d.text || "" }); break;
         case "error":
             addRow(errorRow(d.text || "")); break;
         case "thinking":
@@ -283,23 +285,23 @@ Rectangle {
                         }
                     }
                 }
-                Text {  // assistant answer, rich text prepared by slicer_chat.markdown_html
-                    visible: kind === "assistant"
+                Text {  // assistant answer and notes, rich text prepared by slicer_chat.markdown_html
+                    visible: kind === "assistant" || kind === "note"
                     width: parent.width
-                    text: kind === "assistant" ? model.text : ""
+                    text: visible ? model.text : ""
                     textFormat: Text.RichText
                     wrapMode: Text.Wrap
-                    color: st.textPrimary
+                    color: kind === "note" ? st.textSecondary : st.textPrimary
                     font.family: st.family; font.pixelSize: 13
                     lineHeight: 1.15
                     onLinkActivated: Qt.openUrlExternally(link)
                 }
-                Text {  // note, usage
-                    visible: kind === "note" || kind === "usage"
+                Text {  // status, usage
+                    visible: kind === "status" || kind === "usage"
                     width: parent.width
                     text: visible ? model.text : ""
                     wrapMode: Text.Wrap
-                    font.italic: kind === "note"
+                    font.italic: kind === "status"
                     font.family: st.family
                     font.pixelSize: kind === "usage" ? 10 : 12
                     color: st.textSecondary
@@ -539,11 +541,12 @@ Rectangle {
                     spacing: 4
                     RoundButton {
                         visible: manager.voiceAvailable
-                        icon: manager.voiceState === "" ? "mic" : ""
-                        label: manager.voiceState === "recording" ? "■" : "…"
+                        // recording: a red microphone stops it; the square is only for stopping the agent
+                        icon: manager.voiceState === "" ? "mic" : manager.voiceState === "recording" ? "mic_white" : ""
+                        label: "…"
                         fill: manager.voiceState === "recording" ? st.danger : st.micBg
                         fg: manager.voiceState === "recording" ? "white" : st.textInk
-                        tip: "Голос: нажмите и говорите, нажмите ещё раз — текст появится в поле (Esc — отмена)"
+                        tip: manager.voiceState === "recording" ? "Остановить запись" : "Голос: нажмите и говорите, нажмите ещё раз — текст появится в поле (Esc — отмена)"
                         onClicked: manager.toggleVoice()
                     }
                     RoundButton {
