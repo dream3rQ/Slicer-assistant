@@ -1314,19 +1314,13 @@ def slice_and_save(ctx):
 # ---------------------------------------------------------------- memory of the user's edits
 
 def _mesh_hash(node):
-    """Same part = same hash, wherever and however it lies on the plate: the sorted
-    distances of the vertices from their centroid, rounded to 0.05 mm."""
-    import hashlib
-    import numpy
-    mesh = node.getMeshData()
-    if mesh is None:
+    """Same part = same hash, wherever and however it lies on the plate. The same
+    hash as recommend_print_mode's features.mesh_hash, so memory cases and the
+    geometry tools name a part alike."""
+    try:
+        return geometry.mesh_hash(_printer_triangles(node))
+    except ToolError:
         return None
-    verts = numpy.asarray(mesh.getVertices(), dtype=numpy.float64)
-    if len(verts) == 0:
-        return None
-    radii = numpy.linalg.norm(verts - verts.mean(axis=0), axis=1)
-    rounded = numpy.unique(numpy.round(radii / 0.05).astype(numpy.int64))
-    return hashlib.sha1(rounded.tobytes() + str(len(verts)).encode()).hexdigest()[:16]
 
 
 def memory_context(ctx, object_id=None, extruder=None, plan=None):

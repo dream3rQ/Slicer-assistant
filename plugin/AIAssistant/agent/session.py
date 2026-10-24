@@ -389,8 +389,10 @@ class Session:
         object_id = result.get("object_id")
         if isinstance(features, dict) and object_id:
             entry = {"features": features}
-            if result.get("class") or features.get("class"):
-                entry["class"] = result.get("class") or features.get("class")
+            # recommend_print_mode names the class features.part_class
+            part_class = result.get("class") or features.get("class") or features.get("part_class")
+            if part_class:
+                entry["class"] = part_class
             self.part_features[object_id] = entry
 
     def _attach_memory_hint(self, result, args, context):
