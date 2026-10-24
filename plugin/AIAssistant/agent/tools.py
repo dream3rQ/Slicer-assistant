@@ -1253,6 +1253,74 @@ def slice_and_save(ctx):
             "by_extruder": info.get("by_extruder"), "folder": saved["folder"]}
 
 
+# ---------------------------------------------------------------- memory of the user's edits
+
+def _mesh_hash(node):
+    """Same part = same hash, wherever and however it lies on the plate: the sorted
+    distances of the vertices from their centroid, rounded to 0.05 mm."""
+    import hashlib
+    import numpy
+    mesh = node.getMeshData()
+    if mesh is None:
+        return None
+    verts = numpy.asarray(mesh.getVertices(), dtype=numpy.float64)
+    if len(verts) == 0:
+        return None
+    radii = numpy.linalg.norm(verts - verts.mean(axis=0), axis=1)
+    rounded = numpy.unique(numpy.round(radii / 0.05).astype(numpy.int64))
+    return hashlib.sha1(rounded.tobytes() + str(len(verts)).encode()).hexdigest()[:16]
+
+
+def memory_context(ctx, object_id=None, extruder=None, plan=None):
+    """Part, material and mode for agent/memory.py: the plan's values win over the slicer's."""
+    plan = plan or {}
+    out = {"part": {}, "material": plan.get("material_id"), "mode": plan.get("mode")}
+    try:
+        node = _find_object(object_id)
+        out["part"] = {"name": node.getName(), "mesh_hash": _mesh_hash(node), "object_id": _object_id(node)}
+    except ToolError:
+        pass
+    try:
+        gs = _global_stack()
+        if not out["mode"]:
+            out["mode"] = gs.getProperty("printing_mode", "value")
+        if not out["material"]:
+            active = _extruder_stack(_default_extruder(extruder)).material
+            out["material"] = active.getMetaDataEntry("base_file", active.getId())
+    except ToolError:
+        pass
+    return out
+
+
+def setting_limits(key, extruder=None):
+    """The slicer's limits for a setting, for memory.validate(); None if there is no such setting."""
+    try:
+        stack = _target_stacks(key, extruder)[0]
+    except ToolError:
+        return None
+    out = {"type": stack.getProperty(key, "type")}
+    for prop in ("minimum_value", "maximum_value", "minimum_value_warning", "maximum_value_warning"):
+        out[prop] = _jsonable(stack.getProperty(key, prop))
+    options = stack.getProperty(key, "options")
+    if options:
+        out["options"] = _jsonable(options)
+    return out
+
+
+@tool("get_memory",
+      "Опыт этого ПК (только чтение): правила из правок пользователя, кандидаты и похожие детали с выбранным "
+      "режимом. Правила применяет код сам, менять память нельзя.",
+      {"object_id": {"type": "string"}, "material_id": {"type": "string"},
+       "mode": {"type": "string", "enum": PRINT_MODES_ALLOWED}})
+def get_memory(ctx, object_id=None, material_id=None, mode=None):
+    from . import memory
+    context = memory_context(ctx, object_id, plan={"material_id": material_id, "mode": mode})
+    features = getattr(ctx, "part_features", lambda _id: None)(context["part"].get("object_id"))
+    if features:
+        context["part"].update(features)
+    return memory.get().snapshot(context)
+
+
 # Kept for MCP clients and the HTTP API, hidden from the LLM (see tool()).
 for _name in ("set_print_mode", "list_quality_profiles", "set_quality_profile", "set_material",
               "set_object_extruder", "get_setting", "set_settings", "reset_settings", "list_objects",

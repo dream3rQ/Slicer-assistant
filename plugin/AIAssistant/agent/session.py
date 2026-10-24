@@ -12,7 +12,9 @@ import zipfile
 
 from UM.Logger import Logger
 
-from . import config, llm
+from . import config, llm, memory
+from . import tools as tool_registry
+from .mainthread import run_on_main
 from .mcp import McpServer
 from .prompt import build_system_prompt
 
@@ -34,6 +36,10 @@ class ToolContext:
     def emit(self, kind, data):
         self._session.emit(kind, data)
 
+    def part_features(self, object_id):
+        """{"class", "features"} that recommend_print_mode returned for the object, if any."""
+        return self._session.part_features.get(object_id)
+
 
 class Session:
     def __init__(self):
@@ -47,6 +53,7 @@ class Session:
         self.cancel_requested = False
         self.session_tokens = 0
         self.proposal = None   # apply_plan waiting for the user's decision, see _confirm_plan
+        self.part_features = {}  # object id -> {"class", "features"} from the geometry tools, for memory
         self.mcp = McpServer(context_factory=lambda: ToolContext(self))
 
     # ---- events
@@ -136,15 +143,36 @@ class Session:
     def cancel(self):
         self.cancel_requested = True
 
-    def answer_proposal(self, proposal_id, action, overrides=None, skip=None, text=None):
+    def answer_proposal(self, proposal_id, action, overrides=None, skip=None, text=None, remember=None):
+        """remember: {"keys": [item ids], "scope": "part|material|mode|global"} from "Запомнить"."""
         if action not in PROPOSAL_ACTIONS:
             raise ValueError("action: одно из %s" % ", ".join(PROPOSAL_ACTIONS))
         with self.lock:
             proposal = self.proposal
             if proposal is None or proposal["id"] != proposal_id:
                 raise RuntimeError("Предложение уже закрыто")
-            self._answer(proposal, {"action": action, "overrides": dict(overrides or {}),
-                                    "skip": list(skip or []), "text": (text or "").strip()})
+            answer = {"action": action, "overrides": dict(overrides or {}),
+                      "skip": list(skip or []), "text": (text or "").strip()}
+            if remember and remember.get("keys"):
+                answer["remember"] = {"keys": list(remember["keys"]), "scope": remember.get("scope") or "part"}
+            self._answer(proposal, answer)
+
+    def check_remember(self, proposal_id, item_id, value, scope="part"):
+        """Live check for the card before "Применить": would "Запомнить" keep this value?
+        Returns {"ok", "reason"}."""
+        with self.lock:
+            proposal = self.proposal
+            if proposal is None or proposal["id"] != proposal_id:
+                raise RuntimeError("Предложение уже закрыто")
+            context = proposal["memory_context"]
+        mem = memory.get()
+        key = memory.rule_key(item_id)
+        if key == "mode":
+            return {"ok": True, "reason": "Режим запомнится как пример для этой детали и похожих"}
+        if mem.role() != "expert" and scope != "part":
+            return {"ok": False, "reason": "Новичок может запомнить значение только для этой детали"}
+        ok, reason = mem.validate(key, value, context)
+        return {"ok": ok, "reason": reason or None}
 
     def _answer(self, proposal, answer):
         if proposal["answer"] is None:
@@ -230,8 +258,17 @@ class Session:
         if args is not None:
             if name == "apply_plan" and config.get("confirm_plan"):
                 result, is_error = self._confirm_plan(call.get("id"), args, context)
+            elif name == "apply_plan":
+                args, applied, _ = self._with_memory(args, context)
+                result, is_error = self.mcp.call_tool(name, args, context)
+                if applied and not is_error:
+                    result["memory_applied"] = applied
             else:
                 result, is_error = self.mcp.call_tool(name, args, context)
+            if not is_error and isinstance(result, dict):
+                self._remember_features(result)
+                if name in MEMORY_HINT_TOOLS:
+                    self._attach_memory_hint(result, args, context)
         self.emit("tool_result", {"id": call.get("id"), "name": name, "ok": not is_error,
                                   "result": result, "ms": int((time.time() - started) * 1000)})
         text = json.dumps(result, ensure_ascii=False)
@@ -245,15 +282,24 @@ class Session:
         keeps it one agent run: "Применить" costs no extra LLM step, and the LLM's
         history stays an unchanged prefix (prompt cache). MCP clients and the
         parameter panel call apply_plan directly, without a card."""
+        args, applied, memory_context = self._with_memory(args, context)
         preview, is_error = self.mcp.call_tool("preview_plan", args, context)
         items = [] if is_error else preview.get("items") or []
         if all(i.get("unchanged") and not i.get("error") for i in items):
-            return self.mcp.call_tool("apply_plan", args, context)  # nothing to confirm; errors are apply_plan's to report
-        proposal = {"id": "p_" + uuid.uuid4().hex[:6], "event": threading.Event(), "answer": None}
+            result, is_error = self.mcp.call_tool("apply_plan", args, context)  # nothing to confirm; errors are apply_plan's to report
+            if applied and not is_error:
+                result["memory_applied"] = applied
+            return result, is_error
+        proposal = {"id": "p_" + uuid.uuid4().hex[:6], "event": threading.Event(), "answer": None,
+                    "memory_context": memory_context}
         with self.lock:
             self.proposal = proposal
+        by_item = {a["item_id"]: a for a in applied}
+        for item in preview["items"]:
+            if item["id"] in by_item:
+                item["from_memory"] = by_item[item["id"]]
         self.emit("proposal", {"id": proposal["id"], "call_id": call_id, "extruder": preview["extruder"],
-                               "items": preview["items"]})
+                               "items": preview["items"], "applied_rules": applied, "role": memory.get().role()})
         try:
             while not proposal["event"].wait(0.3):
                 if self.cancel_requested:
@@ -276,12 +322,87 @@ class Session:
                 result["user_skipped"] = skipped
             if changed or skipped:
                 result["note"] = "Пользователь поправил план: объясняй по фактическим значениям, его правки не отменяй"
+            if applied:
+                result["memory_applied"] = applied
+            if not is_error:
+                saved = self._record_edits(memory_context, plan, changed, preview["items"], answer, args)
+                if saved:
+                    result["user_remembered"] = saved
             return result, is_error
         if answer["action"] == "revise":
             return {"status": "not_applied", "user_feedback": answer["text"],
                     "next": "Ответь на вопрос или учти замечание, затем снова вызови apply_plan с исправленным планом"}, False
         return {"status": "rejected", "user_feedback": answer["text"],
                 "next": "Ничего не применяй и не нарезай: коротко ответь и жди указаний пользователя"}, False
+
+    # ---- memory of the user's edits (agent/memory.py)
+    def _memory_context(self, args, context, object_id=None):
+        try:
+            ctx = run_on_main(tool_registry.memory_context, context, object_id, args.get("extruder"), args)
+        except Exception:
+            Logger.logException("w", "AI Assistant: no memory context")
+            return {"part": {}, "material": args.get("material_id"), "mode": args.get("mode")}
+        features = self.part_features.get(ctx["part"].get("object_id"))
+        if features:
+            ctx["part"].update(features)
+        return ctx
+
+    def _with_memory(self, args, context):
+        """apply_plan arguments with the active rules laid over them, before the card.
+        Returns (args, applied, memory context); memory never breaks the plan."""
+        memory_context = self._memory_context(args, context)
+        try:
+            plan, applied = memory.get().apply_rules(args, memory_context)
+        except Exception:
+            Logger.logException("w", "AI Assistant: memory rules not applied")
+            return args, [], memory_context
+        if plan.get("material_id"):
+            memory_context["material"] = plan["material_id"]
+        if plan.get("mode"):
+            memory_context["mode"] = plan["mode"]
+        return plan, applied, memory_context
+
+    def _record_edits(self, memory_context, plan, changed, items, answer, args):
+        mem = memory.get()
+        remember = answer.get("remember")
+        context = dict(memory_context, material=plan.get("material_id") or memory_context.get("material"),
+                       mode=plan.get("mode") or memory_context.get("mode"))
+        if remember:
+            values = {}
+            for item in items:
+                key = memory.rule_key(item["id"])
+                values[key] = (answer.get("overrides") or {}).get(item["id"], item["proposed"])
+            remember = dict(remember, values=values)
+        try:
+            saved = mem.record_edits(context, changed, remember, reasons=args.get("reasons"))
+        except Exception as e:
+            Logger.logException("w", "AI Assistant: edits not recorded")
+            self.emit("memory_saved", {"error": str(e)})
+            return None
+        self.emit("memory_saved", dict(saved, note=mem.load_note))
+        mem.load_note = None
+        return {k: v for k, v in saved["rules"].items()} or None
+
+    def _remember_features(self, result):
+        """Geometry tools return {"object_id", "features", "class"?}: keep them for precedents."""
+        features = result.get("features")
+        object_id = result.get("object_id")
+        if isinstance(features, dict) and object_id:
+            entry = {"features": features}
+            if result.get("class") or features.get("class"):
+                entry["class"] = result.get("class") or features.get("class")
+            self.part_features[object_id] = entry
+
+    def _attach_memory_hint(self, result, args, context):
+        """The «Опыт этого ПК» block rides along with the geometry result: no extra step."""
+        try:
+            ctx = self._memory_context({"extruder": args.get("extruder")}, context, result.get("object_id"))
+            block = memory.get().prompt_block(ctx)
+        except Exception:
+            Logger.logException("w", "AI Assistant: memory hint failed")
+            return
+        if block:
+            result["memory"] = block
 
     def _request_messages(self, with_images):
         """History as sent to the LLM. The provider caches the longest unchanged
@@ -304,6 +425,15 @@ class Session:
 
 
 PROPOSAL_ACTIONS = ("apply", "revise", "reject")
+# Tool results that get the «Опыт этого ПК» block attached (see _attach_memory_hint).
+MEMORY_HINT_TOOLS = ("analyze_model", "recommend_print_mode")
+
+
+def _stack_limits(key, context):
+    return run_on_main(tool_registry.setting_limits, key)
+
+
+memory.limits_provider = _stack_limits
 
 
 def _same(a, b):
