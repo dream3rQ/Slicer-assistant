@@ -20,7 +20,8 @@ DEFAULTS = OrderedDict([
     ("confirm_plan", True),   # show apply_plan as a card and wait for "Применить" (see Session._confirm_plan)
     ("slicer_popups", True),  # also show the plan card and notifications inside the slicer (slicer_ui.py)
     ("panel_open", True),     # the Stereo Agent panel was open when the slicer closed
-    ("panel_width", 334),     # the panel's width after the user dragged its left edge
+    ("panel_width", 334),
+    ("attach_dir", ""),       # the folder the "+" dialog opened last     # the panel's width after the user dragged its left edge
 ])
 
 

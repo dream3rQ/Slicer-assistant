@@ -203,6 +203,8 @@ class SlicerChat(QObject):
         session = self._extension.ensureServer().session
         for url in urls:
             path = url.toLocalFile() if isinstance(url, QUrl) else (QUrl(url).toLocalFile() if "://" in url else url)
+            if any(a["name"] == os.path.basename(path) for a in self._attachments):
+                continue  # already attached
             try:
                 with open(path, "rb") as f:
                     data = base64.b64encode(f.read()).decode("ascii")
@@ -210,6 +212,19 @@ class SlicerChat(QObject):
             except Exception as e:
                 self._local("error", "Не удалось приложить %s: %s" % (os.path.basename(path), e))
         self.attachmentsChanged.emit()
+
+    @pyqtSlot()
+    def pickFiles(self):
+        """The "+" button. A Qt widgets dialog from Python, not QtQuick.Dialogs:
+        with a FileDialog in our QML the slicer also opened the picked files
+        itself (Convert Image for photos, "Invalid File" for docx)."""
+        from PyQt5.QtWidgets import QFileDialog
+        paths, _ = QFileDialog.getOpenFileNames(
+            None, "Приложить файлы для ассистента", config.get("attach_dir") or os.path.expanduser("~"),
+            "Модели, фото и ТЗ (*.stl *.obj *.3mf *.png *.jpg *.jpeg *.webp *.docx *.txt *.md);;Все файлы (*)")
+        if paths:
+            config.set_many({"attach_dir": os.path.dirname(paths[0])})
+            self.addFiles(paths)
 
     @pyqtSlot(str)
     def removeAttachment(self, file_id):

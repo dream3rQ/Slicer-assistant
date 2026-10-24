@@ -6,7 +6,6 @@
 import QtQuick 2.7
 import QtQuick.Controls 1.4
 import QtQuick.Controls.Styles 1.4
-import QtQuick.Dialogs 1.2
 import QtQuick.Layouts 1.1
 import QtQuick.Window 2.2
 
@@ -184,12 +183,12 @@ Rectangle {
             Icon { anchors.centerIn: parent; name: "close"; width: 10; height: 10 }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.hide() }
         }
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: drop.containsDrag ? st.borderAccent : st.border }
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: drop.dragging ? st.borderAccent : st.border }
     }
 
     // ---- empty state: logo, greeting and quick prompts
     Column {
-        visible: messages.count === 0 && !drop.containsDrag
+        visible: messages.count === 0 && !drop.dragging
         y: 89
         x: base.pad
         width: parent.width - 2 * base.pad
@@ -227,12 +226,21 @@ Rectangle {
                 { label: "что влияет сильнее всего", text: "Что сильнее всего влияет на время печати этой детали?" }
             ]
         }
+        Item { width: 1; height: 16 }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+            text: "Модель, фото детали или ТЗ можно перетащить на панель или приложить через «+»"
+            color: st.textSecondary
+            font.family: st.family; font.pixelSize: 11
+        }
     }
 
     // ---- messages
     ScrollView {
         id: scroll
-        visible: messages.count > 0 && !drop.containsDrag
+        visible: messages.count > 0 && !drop.dragging
         anchors.top: header.bottom
         anchors.topMargin: 16
         anchors.bottom: composer.top
@@ -385,17 +393,37 @@ Rectangle {
     }
 
     // ---- drop zone, shown while files are dragged over the panel (mock-up frame 7)
+    // Files dragged over the whole panel go to the assistant; the slicer's own
+    // drop area under it (which opens models in the scene) does not get them.
     DropArea {
         id: drop
+        anchors.fill: parent
+        z: 20
+        keys: ["text/uri-list"]
+        property bool dragging: false
+        onEntered: { dragging = true; drag.accept(Qt.CopyAction) }
+        onExited: dragging = false
+        onDropped: {
+            dragging = false;
+            // as strings: a list of url values reaches Python as an empty list
+            var urls = [];
+            for (var i = 0; i < drop.urls.length; i++) urls.push(String(drop.urls[i]));
+            if (urls.length) manager.addFiles(urls);
+            drop.accept(Qt.CopyAction);
+        }
+    }
+    onVisibleChanged: drop.dragging = false
+    Rectangle {  // while dragging, the drop zone covers the messages
+        visible: drop.dragging
         anchors.top: header.bottom
         anchors.bottom: composer.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        onDropped: { if (drop.urls.length) manager.addFiles(drop.urls); drop.accept() }
+        width: parent.width
+        color: "white"
     }
     Canvas {
         id: dashed
-        visible: drop.containsDrag
+        visible: drop.dragging
+        z: 1
         x: base.pad
         y: header.height + 33
         width: parent.width - 2 * base.pad
@@ -421,6 +449,15 @@ Rectangle {
             spacing: 6
             Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "file_upload"; width: 61; height: 61 }
             Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Перетащите файлы"; color: st.borderAccent; font.family: st.family; font.pixelSize: 15; font.weight: Font.DemiBold }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: dashed.width - 48
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                text: "Отпустите здесь: модель, фото или ТЗ получит ассистент, на стол они не попадут"
+                color: st.textSecondary
+                font.family: st.family; font.pixelSize: 11
+            }
         }
     }
 
@@ -493,7 +530,7 @@ Rectangle {
                 Text {
                     x: 20; y: input.y + 8
                     visible: input.text === "" && !input.activeFocus
-                    text: drop.containsDrag ? "Спросить ..." : "Спросить Стерео..."
+                    text: drop.dragging ? "Спросить ..." : "Спросить Стерео..."
                     color: st.placeholder
                     font.family: st.family; font.pixelSize: 14
                 }
@@ -508,7 +545,7 @@ Rectangle {
                         width: 23; height: 23
                         anchors.verticalCenter: parent.verticalCenter
                         Icon { anchors.centerIn: parent; name: "plus_attach"; width: 14; height: 14 }
-                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: fileDialog.open() }
+                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: manager.pickFiles() }
                     }
                     ModeChip { anchors.verticalCenter: parent.verticalCenter; mode: base.mode; onPicked: base.mode = mode }
                 }
@@ -542,14 +579,6 @@ Rectangle {
                 }
             }
         }
-    }
-
-    FileDialog {
-        id: fileDialog
-        title: "Приложить файлы"
-        selectMultiple: true
-        nameFilters: ["Модели, фото и ТЗ (*.stl *.obj *.3mf *.png *.jpg *.jpeg *.webp *.docx *.txt *.md)", "Все файлы (*)"]
-        onAccepted: manager.addFiles(fileDialog.fileUrls)
     }
 
     // ---- settings window
