@@ -15,7 +15,7 @@ from urllib.parse import urlparse, parse_qs
 from UM.Logger import Logger
 
 from . import voice
-from .agent import config, llm
+from .agent import config, llm, memory
 from .agent import tools as tool_registry
 from .agent.mainthread import run_on_main
 from .agent.session import Session
@@ -23,6 +23,8 @@ from .agent.session import Session
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 MAX_BODY = 200 * 1024 * 1024
 REQUIRED_HEADER = "X-STE-AI"
+MEMORY_METHODS = ("role", "set_role", "list_rules", "list_events", "list_cases", "update_rule", "disable_rule",
+                  "delete_rule", "rollback", "export", "import_", "validate")
 
 
 class ChatServer(ThreadingMixIn, HTTPServer):
@@ -158,11 +160,26 @@ class Handler(SimpleHTTPRequestHandler):
                 # The plan card's buttons: apply (with the user's edits), revise (text), reject.
                 try:
                     session.answer_proposal(payload.get("id"), payload.get("action"), payload.get("overrides"),
-                                            payload.get("skip"), payload.get("text"))
+                                            payload.get("skip"), payload.get("text"), payload.get("remember"))
                 except (RuntimeError, ValueError) as e:
                     self._send_json({"error": str(e)}, 409)
                     return
                 self._send_json({"ok": True})
+            elif url.path == "/api/memory":
+                # Memory window API (agent/memory.py): {"method": "list_rules", "args": {...}}.
+                method = payload.get("method")
+                if method == "check_remember":
+                    self._send_json(session.check_remember(**(payload.get("args") or {})))
+                    return
+                if method not in MEMORY_METHODS:
+                    self._send_json({"error": "method: одно из %s" % ", ".join(MEMORY_METHODS)}, 400)
+                    return
+                try:
+                    result = getattr(memory.get(), method)(**(payload.get("args") or {}))
+                except memory.MemoryRefused as e:
+                    self._send_json({"error": str(e)}, 409)
+                    return
+                self._send_json({"result": result})
             elif url.path == "/api/cancel":
                 session.cancel()
                 self._send_json({"ok": True})

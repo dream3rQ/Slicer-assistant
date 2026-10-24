@@ -70,8 +70,8 @@ web/ (SPA: HTML+CSS+JS)  ──fetch / polling──▶  server.py (HTTP на 12
 | Нарезка и экспорт | `slice`, `get_slice_result`, `export_gcode`, `save_project_3mf`, `save_results` |
 | Составные шаги | `apply_plan` (режим → материал → профиль → настройки за один вызов; в чате сначала карточка с подтверждением, см. `docs/plan-card.md`), `slice_and_save` |
 
-Через MCP доступны все инструменты. Модели LLM показываются только 12 (`get_scene_info`, `load_model`,
-`analyze_model`, `recommend_materials`, `list_materials`, `search_settings`, `apply_plan`, `orient_object`,
+Через MCP доступны все инструменты. Модели LLM показываются только 14 из 32 (`get_scene_info`, `load_model`,
+`analyze_model`, `recommend_print_mode`, `recommend_materials`, `get_memory`, `list_materials`, `search_settings`, `apply_plan`, `orient_object`,
 `rotate_object`, `move_object`, `clear_scene`, `slice_and_save`): описания инструментов отправляются на
 каждом шаге, а составные инструменты сокращают число шагов.
 

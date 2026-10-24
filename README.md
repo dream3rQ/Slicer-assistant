@@ -13,7 +13,10 @@
 | `plugin/AIAssistant/` | Исходный код плагина. Установка, настройка LLM и архитектура — в [его README](plugin/AIAssistant/README.md) |
 | `results/<имя модели>/` | Результаты по деталям кейса: `project.3mf`, `result.gcode`, скриншоты чата |
 | `tools/check.py`, `tools/parts.json` | Сверка решений ассистента с эталонными ответами по 7 деталям кейса |
+| `tools/mode_check.py` | Проверка выбора режима 3D/5D по STL и ТЗ без слайсера |
 | `docs/plan-card.md` | Карточка изменений перед применением: данные и API для интерфейса |
+| `docs/memory.md` | Память правок агента: правила, журнал, проверка значений, API для окна памяти |
+| `tests/` | Юнит-тесты без слайсера: `python -m unittest discover -s tests` |
 | `tools/questionnaire/` | Опросник для специалиста по печати, из ответов которого собраны правила агента |
 
 ## Быстрый старт
@@ -28,4 +31,12 @@
 
 ```
 python tools/check.py "%USERPROFILE%\Documents\STE AI Assistant\results"
+```
+
+Выбор режима 3D/5D проверяется без слайсера: `tools/mode_check.py` считает геометрические признаки
+по STL и балл 3D против 5D (тот же код, что у инструмента `recommend_print_mode`), с текстом ТЗ из .docx,
+и сверяет режим с `tools/parts.json`. Плюс «ловушки» из примитивов: куб, сплошной цилиндр, тонкая трубка.
+
+```
+python tools/mode_check.py "<папка с деталями кейса>" [-v] [--no-tz]
 ```

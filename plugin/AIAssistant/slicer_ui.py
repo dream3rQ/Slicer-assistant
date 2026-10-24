@@ -86,9 +86,10 @@ class SlicerUI(QObject):
     _event = pyqtSignal(object, object)
     proposalChanged = pyqtSignal()
 
-    def __init__(self, extension, parent=None):
+    def __init__(self, extension, memory, parent=None):
         super().__init__(parent)
         self._extension = extension
+        self._memory = memory
         self._card = None
         self._proposal = None
         self._session = None
@@ -100,13 +101,23 @@ class SlicerUI(QObject):
     def proposalJson(self):
         return json.dumps(self._proposal or {"items": []}, ensure_ascii=False)
 
+    @pyqtProperty(QObject, constant=True)
+    def memory(self):
+        return self._memory
+
     @pyqtSlot(str, str, str, str)
     def answer(self, action, overrides_json, skip_json, text):
+        self.answerRemember(action, overrides_json, skip_json, text, "[]")
+
+    @pyqtSlot(str, str, str, str, str)
+    def answerRemember(self, action, overrides_json, skip_json, text, remember_json):
+        """remember_json: [{"keys": [item id, ...], "scope": "part|material|global"}],
+        the rows ticked "Запомнить", one entry per scope (see docs/plan-card.md)."""
         if self._session is None or self._proposal is None:
             return
         try:
             self._session.answer_proposal(self._proposal["id"], action, json.loads(overrides_json or "{}"),
-                                          json.loads(skip_json or "[]"), text)
+                                          json.loads(skip_json or "[]"), text, json.loads(remember_json or "[]"))
         except (RuntimeError, ValueError) as e:
             Message(str(e), title="AI Assistant", lifetime=10).show()
             self._close()
@@ -122,9 +133,12 @@ class SlicerUI(QObject):
     # ---- events
     def _onEvent(self, session, event):
         server = self._extension.server()
-        if server is None or session is not server.session:
-            return
         kind, data = event["type"], event.get("data") or {}
+        # "Новый диалог" replaces the session while its card may be open: the old
+        # session's proposal_closed still has to close the card.
+        stale_close = kind == "proposal_closed" and session is self._session
+        if server is None or (session is not server.session and not stale_close):
+            return
         if kind == "proposal":
             self._session, self._proposal = session, data
             self.proposalChanged.emit()

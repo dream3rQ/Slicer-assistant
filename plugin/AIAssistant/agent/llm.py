@@ -83,6 +83,10 @@ def _request(method, path, body=None, timeout=180):
         if "CERTIFICATE_VERIFY_FAILED" in str(e.reason):
             hint = " Снимите галочку «Проверять SSL-сертификат» в настройках."
         raise LLMError("Не удалось подключиться к LLM: %s.%s" % (e.reason, hint))
+    except OSError as e:
+        # a read timeout (socket.timeout) or a dropped connection while reading the answer;
+        # "подключиться" makes chat() retry it like a refused connection
+        raise LLMError("Не удалось подключиться к LLM: нет ответа (%s)." % (e or e.__class__.__name__))
     except ValueError as e:
         raise LLMError("LLM вернула не JSON: %s" % e)
 

@@ -9,11 +9,13 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from collections import OrderedDict
 
 from .mainthread import run_on_main
 from . import config
+from . import geometry
 from . import materials
 
 TOOLS = OrderedDict()
@@ -671,18 +673,59 @@ def list_objects(ctx):
     return {"objects": [_describe_object(n) for n in _objects()]}
 
 
-@tool("analyze_model",
-      "Геометрический анализ объекта: габариты, вероятная ось вращения (для 5D), площадь опоры и доля нависаний "
-      "для 6 вариантов укладки. Используй для выбора ориентации и режима.",
-      {"object_id": {"type": "string"}})
-def analyze_model(ctx, object_id=None):
+def _printer_triangles(node):
+    """Triangles in printer axes (x, y back, z up) from Cura's (x, y up, z front)."""
     import numpy
-    node = _find_object(object_id)
     tris = _triangles(node)
     if tris is None or len(tris) == 0:
         raise ToolError("У объекта нет геометрии")
-    # Convert Cura (x, y-up, z-front) to printer (x, y-back, z-up).
-    pts = numpy.stack([tris[..., 0], -tris[..., 2], tris[..., 1]], axis=-1)
+    return numpy.stack([tris[..., 0], -tris[..., 2], tris[..., 1]], axis=-1)
+
+
+_features_lock = threading.Lock()
+_features_cache = {}
+
+
+def _model_features(object_id):
+    """Geometric features (geometry.analyze) of an object as it stands now.
+    Scene access runs on the main thread, the math in the calling worker so the
+    slicer window does not freeze on a large mesh."""
+    def grab():
+        node = _find_object(object_id)
+        gs = _global_stack()
+        try:
+            base = float(gs.getProperty("cylindrical_mode_base_diameter", "value") or 6.0)
+        except (TypeError, ValueError):
+            base = 6.0
+        transform = tuple(round(float(x), 4) for x in node.getWorldTransformation().getData().flat)
+        return node, _printer_triangles(node), base, (_object_id(node), transform, base)
+    node, pts, base, key = run_on_main(grab)
+    with _features_lock:
+        if key not in _features_cache:
+            _features_cache.clear()
+            _features_cache[key] = geometry.analyze(pts, base_diameter=base)
+        return node, pts, _features_cache[key]
+
+
+def _last_user_text(ctx):
+    session = getattr(ctx, "_session", None)
+    for message in reversed(getattr(session, "messages", None) or []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+        return content or ""
+    return ""
+
+
+@tool("analyze_model",
+      "Геометрический анализ объекта: габариты, ось вращения и класс детали, площадь опоры и доля нависаний "
+      "для 6 вариантов укладки. Используй для выбора ориентации; режим 3D/5D — recommend_print_mode.",
+      {"object_id": {"type": "string"}}, main_thread=False)
+def analyze_model(ctx, object_id=None):
+    import numpy
+    node, pts, features = _model_features(object_id)
     flat = pts.reshape(-1, 3)
     mn, mx = flat.min(axis=0), flat.max(axis=0)
     size = mx - mn
@@ -693,19 +736,6 @@ def analyze_model(ctx, object_id=None):
     normals[keep] = cross[keep] / area2[keep][:, None]
     areas = area2 / 2.0
     total_area = float(areas.sum())
-
-    # Rotation axis guess: the axis whose two perpendicular extents match and
-    # whose vertices sit at a near-constant radius band.
-    axes = ["x", "y", "z"]
-    symmetry = []
-    for i, name in enumerate(axes):
-        a, b = [j for j in range(3) if j != i]
-        if size[a] <= 0 or size[b] <= 0:
-            continue
-        ratio = min(size[a], size[b]) / max(size[a], size[b])
-        symmetry.append((ratio, name))
-    symmetry.sort(reverse=True)
-    rotation_axis = symmetry[0][1] if symmetry and symmetry[0][0] > 0.97 else None
 
     options = []
     for direction, (axis_index, sign) in (("-z", (2, -1)), ("+z", (2, 1)), ("-x", (0, -1)),
@@ -727,16 +757,44 @@ def analyze_model(ctx, object_id=None):
             "overhang_share_pct": _r(100.0 * areas[overhang].sum() / max(total_area, 1e-9), 1),
         })
     options.sort(key=lambda o: (o["overhang_area_mm2"] - 2 * o["contact_area_mm2"]))
+    revolution = features["revolution_share"] >= 0.5
     return {
         "object_id": _object_id(node),
         "size_mm": {"x": _r(size[0]), "y": _r(size[1]), "z": _r(size[2])},
         "surface_area_mm2": _r(total_area, 1),
-        "triangles": int(len(tris)),
-        "rotation_axis_guess": rotation_axis,
+        "triangles": int(len(pts)),
+        "part_class": features["part_class"],
+        "rotation_axis_guess": features["rotation_axis"] if revolution else None,
         "rotation_axis_note": ("Для 5D ось вращения детали должна быть вертикальной (z). "
                                "Если ось x или y — сначала orient_object(axis_up=...)."),
         "orientations_best_first": options,
     }
+
+
+@tool("recommend_print_mode",
+      "Выбор режима 3D/5D по геометрии и ТЗ: балл 3D против 5D с раскладкой по условиям (какое решило), "
+      "Spiral или full, уверенность и геометрические признаки детали. В requirements_text передай текст ТЗ "
+      "или требования пользователя дословно.",
+      {"object_id": {"type": "string"},
+       "requirements_text": {"type": "string", "description": "Текст ТЗ / требования пользователя"}},
+      main_thread=False)
+def recommend_print_mode(ctx, object_id=None, requirements_text=None):
+    node, _, features = _model_features(object_id)
+    text = requirements_text if requirements_text else _last_user_text(ctx)
+    result = geometry.recommend(features, text)
+    result["object_id"] = _object_id(node)
+    # Only the conditions that scored go out in full: every result is resent on every step.
+    result["not_passed"] = [c["name"] for c in result["conditions"] if not c["passed"]]
+    result["conditions"] = [c for c in result["conditions"] if c["passed"]]
+    result["features"] = features
+    if result["verdict"] != "classic" and features["rotation_axis"] != "z":
+        result["orientation_note"] = ("Ось вращения детали — %s: перед печатью orient_object(axis_up='%s'), "
+                                      "затем move_object в (0, 0)." % (features["rotation_axis"],
+                                                                       features["rotation_axis"]))
+    if result["confidence"] == "low":
+        result["confidence_note"] = ("Перевес меньше 2 баллов: скажи в «Почему так», что выбор неоднозначный, "
+                                     "и какое условие могло бы его изменить.")
+    return result
 
 
 @tool("orient_object",
@@ -1251,6 +1309,68 @@ def slice_and_save(ctx):
     saved = save_results(ctx)
     return {"print_time": info.get("print_time"), "total_weight_g": info.get("total_weight_g"),
             "by_extruder": info.get("by_extruder"), "folder": saved["folder"]}
+
+
+# ---------------------------------------------------------------- memory of the user's edits
+
+def _mesh_hash(node):
+    """Same part = same hash, wherever and however it lies on the plate. The same
+    hash as recommend_print_mode's features.mesh_hash, so memory cases and the
+    geometry tools name a part alike."""
+    try:
+        return geometry.mesh_hash(_printer_triangles(node))
+    except ToolError:
+        return None
+
+
+def memory_context(ctx, object_id=None, extruder=None, plan=None):
+    """Part, material and mode for agent/memory.py: the plan's values win over the slicer's."""
+    plan = plan or {}
+    out = {"part": {}, "material": plan.get("material_id"), "mode": plan.get("mode")}
+    try:
+        node = _find_object(object_id)
+        out["part"] = {"name": node.getName(), "mesh_hash": _mesh_hash(node), "object_id": _object_id(node)}
+    except ToolError:
+        pass
+    try:
+        gs = _global_stack()
+        if not out["mode"]:
+            out["mode"] = gs.getProperty("printing_mode", "value")
+        if not out["material"]:
+            active = _extruder_stack(_default_extruder(extruder)).material
+            out["material"] = active.getMetaDataEntry("base_file", active.getId())
+    except ToolError:
+        pass
+    return out
+
+
+def setting_limits(key, extruder=None):
+    """The slicer's limits for a setting, for memory.validate(); None if there is no such setting."""
+    try:
+        stack = _target_stacks(key, extruder)[0]
+    except ToolError:
+        return None
+    out = {"type": stack.getProperty(key, "type")}
+    for prop in ("minimum_value", "maximum_value", "minimum_value_warning", "maximum_value_warning"):
+        out[prop] = _jsonable(stack.getProperty(key, prop))
+    options = stack.getProperty(key, "options")
+    if options:
+        out["options"] = _jsonable(options)
+    return out
+
+
+@tool("get_memory",
+      "Опыт этого ПК (только чтение): правила из правок пользователя, кандидаты и похожие детали с выбранным "
+      "режимом. Правила применяет код сам, менять память нельзя.",
+      {"object_id": {"type": "string"}, "material_id": {"type": "string"},
+       "mode": {"type": "string", "enum": PRINT_MODES_ALLOWED}})
+def get_memory(ctx, object_id=None, material_id=None, mode=None):
+    from . import memory
+    context = memory_context(ctx, object_id, plan={"material_id": material_id, "mode": mode})
+    features = getattr(ctx, "part_features", lambda _id: None)(context["part"].get("object_id"))
+    if features:
+        context["part"].update(features)
+    return memory.get().snapshot(context)
 
 
 # Kept for MCP clients and the HTTP API, hidden from the LLM (see tool()).

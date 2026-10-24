@@ -2,8 +2,10 @@
 // designers' Figma mock-up (sizes ×1: the mock-up draws it at 0.82).
 // Data: manager.proposalJson (items with group, current, proposed, options,
 // unit, type, minimum/maximum, reason, warning/error; see docs/plan-card.md).
-// Buttons call manager.answer(action, overridesJson, skipJson, text); the
-// manager calls are the contract.
+// Buttons call manager.answerRemember(action, overridesJson, skipJson, text,
+// rememberJson); the manager calls are the contract. A row the user changed
+// gets "Запомнить" with a scope (manager.memory, memory_ui.py); a row that came
+// from the user's rules (proposal.applied_rules) gets the "из ваших правок" plaque.
 import QtQuick 2.7
 import QtQuick.Controls 1.4
 import QtQuick.Controls.Styles 1.4
@@ -15,6 +17,14 @@ Item {
     property var proposal: JSON.parse(manager.proposalJson)
     property bool explain: false   // the "?" button: reasons and previous values under the rows
     property int errors: 0         // rows whose value is out of range; "Применить" waits for them
+    property var memory: manager.memory
+    readonly property bool expert: memory ? memory.role === "expert" : false
+    // item id -> {rule_id, from, to} for rows the user's rules changed
+    property var applied: {
+        var out = {}, list = proposal.applied_rules || [];
+        for (var i = 0; i < list.length; i++) out[list[i].item_id] = list[i];
+        return out;
+    }
     Style { id: st }
 
     // Placed left of the panel until the user drags it by the header; then it stays where it was put.
@@ -31,8 +41,15 @@ Item {
 
     function num(v) {
         if (typeof v !== "number") return v;
-        var s = Math.round(v) === v ? String(v) : v.toFixed(2);
+        // up to 4 decimals without trailing zeros: 0.125 stays 0,125 (toFixed(2) made it 0,13,
+        // and the rounded field then went out as the user's edit)
+        var s = Math.round(v) === v ? String(v) : String(parseFloat(v.toFixed(4)));
         return s.replace(".", ",");
+    }
+    // the user's value against the proposed one: numbers by value, the rest as text
+    function same(a, b) {
+        if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 1e-9;
+        return String(a) === String(b);
     }
     function fmt(item, v) {
         if (v === null || v === undefined || v === "") return "—";
@@ -47,15 +64,53 @@ Item {
         for (var i = 0; i < rows.count; i++) if (rows.itemAt(i) && rows.itemAt(i).rangeError !== "") n++;
         errors = n;
     }
+    // the value of a card row as the user left it ("mode", "material_id")
+    function chosen(itemId) {
+        for (var i = 0; i < rows.count; i++) {
+            var row = rows.itemAt(i);
+            if (row && row.item.id === itemId) return row.edited();
+        }
+        return undefined;
+    }
+    function itemById(itemId) {
+        var items = proposal.items || [];
+        for (var i = 0; i < items.length; i++) if (items[i].id === itemId) return items[i];
+        return null;
+    }
+    function materialName() {
+        var it = itemById("material_id");
+        return it ? fmt(it, chosen("material_id")) : "";
+    }
+    function memoryContext() {
+        return { material: chosen("material_id"), mode: chosen("mode") };
+    }
+    // "Запомнить" choices: a novice may only remember for this part (plan v0.7.0);
+    // the print mode is remembered as a precedent for this part only.
+    function scopesFor(item) {
+        var out = [{ value: "part", label: item.id === "mode" ? "для этой детали (прецедент)" : "для этой детали" }];
+        if (!expert || item.id === "mode") return out;
+        var m = materialName();
+        // a material is never remembered "for this material" (memory refuses it)
+        if (item.id !== "material_id")
+            out.push({ value: "material", label: m ? "для материала " + m : "для этого материала" });
+        out.push({ value: "global", label: "всегда" });
+        return out;
+    }
     function apply() {
         if (errors > 0) return;
-        var overrides = {};
+        var overrides = {}, byScope = {};
         for (var i = 0; i < rows.count; i++) {
             var row = rows.itemAt(i);
             var v = row.edited();
-            if (v !== undefined && String(v) !== String(row.item.proposed)) overrides[row.item.id] = v;
+            if (v !== undefined && !same(v, row.item.proposed)) overrides[row.item.id] = v;
+            if (row.remember && row.memoryError === "" && overrides[row.item.id] !== undefined) {
+                var scope = row.scopes[row.scopeIndex].value;
+                (byScope[scope] = byScope[scope] || []).push(row.item.id);
+            }
         }
-        manager.answer("apply", JSON.stringify(overrides), "[]", "");
+        var remember = [];
+        for (var k in byScope) remember.push({ keys: byScope[k], scope: k });
+        manager.answerRemember("apply", JSON.stringify(overrides), "[]", "", JSON.stringify(remember));
     }
 
     // glow and frame
@@ -163,6 +218,24 @@ Item {
                             }
                             onRangeErrorChanged: base.countErrors()
                             readonly property string problem: rangeError || item.error || ""
+                            // "Запомнить": only for a value the user changed, and only a valid one
+                            property bool remember: false
+                            property int scopeIndex: 0
+                            readonly property var scopes: base.scopesFor(item)
+                            readonly property bool canRemember: userChanged && rangeError === "" && !item.error && !!base.memory
+                            onCanRememberChanged: if (!canRemember) remember = false
+                            onScopesChanged: if (scopeIndex >= scopes.length) scopeIndex = 0
+                            property string memoryError: {
+                                if (!remember || !canRemember) return "";
+                                var deps = field.text + combo.currentIndex + scopeIndex;
+                                var ctx = base.memoryContext();
+                                ctx.scope = scopes[Math.min(scopeIndex, scopes.length - 1)].value;
+                                var r = JSON.parse(base.memory.validate(item.key || item.id, JSON.stringify(edited()), JSON.stringify(ctx)));
+                                return r.ok ? "" : r.reason;
+                            }
+                            readonly property var fromRule: base.applied[item.id] || null
+                            property bool ruleOpen: false
+                            property var rule: ruleOpen && fromRule && base.memory ? JSON.parse(base.memory.rule(fromRule.rule_id)) : null
 
                             function edited() {
                                 if (hasOptions) return choices[combo.currentIndex].value;
@@ -239,7 +312,7 @@ Item {
                                         font.family: st.family; font.pixelSize: 12; font.weight: Font.Medium
                                         selectByMouse: true
                                         clip: true
-                                        onTextChanged: row.userChanged = String(row.edited()) !== String(row.item.proposed)
+                                        onTextChanged: row.userChanged = !base.same(row.edited(), row.item.proposed)
                                         Keys.onUpPressed: row.step(1)
                                         Keys.onDownPressed: row.step(-1)
                                     }
@@ -289,6 +362,140 @@ Item {
                                 }
                             }
 
+                            Item {  // "Запомнить" with a scope, or the "из ваших правок" plaque
+                                visible: row.canRemember || !!row.fromRule
+                                width: parent.width
+                                height: visible ? 28 : 0
+                                Row {
+                                    x: 2
+                                    height: parent.height
+                                    spacing: 10
+                                    Item {  // the tick box
+                                        visible: row.canRemember
+                                        width: rememberLabel.x + rememberLabel.implicitWidth; height: parent.height
+                                        Rectangle {
+                                            id: box
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 14; height: 14; radius: 3
+                                            color: row.remember ? st.accent : "white"
+                                            border.width: 1
+                                            border.color: row.remember ? st.accent : st.borderAccent
+                                            Canvas {
+                                                anchors.fill: parent
+                                                visible: row.remember
+                                                onPaint: {
+                                                    var c = getContext("2d");
+                                                    c.reset();
+                                                    c.lineWidth = 1.6; c.lineCap = "round"; c.lineJoin = "round";
+                                                    c.strokeStyle = "white";
+                                                    c.beginPath(); c.moveTo(3.5, 7.2); c.lineTo(6, 9.6); c.lineTo(10.6, 4.4); c.stroke();
+                                                }
+                                            }
+                                        }
+                                        Text {
+                                            id: rememberLabel
+                                            x: box.width + 7
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: "Запомнить"
+                                            color: st.accent
+                                            font.family: st.family; font.pixelSize: 11; font.weight: Font.Medium
+                                        }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: row.remember = !row.remember }
+                                    }
+                                    Text {  // one choice: no list to open
+                                        visible: row.canRemember && row.remember && row.scopes.length === 1
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: row.scopes[0].label
+                                        color: st.textPrimary
+                                        font.family: st.family; font.pixelSize: 11
+                                    }
+                                    Rectangle {
+                                        visible: row.canRemember && row.remember && row.scopes.length > 1
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 250; height: 24; radius: 5
+                                        color: "white"; border.width: 1; border.color: st.borderAccent
+                                        ComboBox {
+                                            id: scopeCombo
+                                            anchors.fill: parent
+                                            model: row.scopes.map(function (o) { return o.label })
+                                            // by hand: Controls 1 puts currentIndex back to 0 when the model changes
+                                            onModelChanged: currentIndex = row.scopeIndex
+                                            Component.onCompleted: currentIndex = row.scopeIndex
+                                            Connections { target: row; onScopeIndexChanged: scopeCombo.currentIndex = row.scopeIndex }
+                                            onActivated: row.scopeIndex = index
+                                            style: ComboBoxStyle {
+                                                background: Item {
+                                                    Icon { anchors.right: parent.right; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter; name: "chevron_down"; width: 10; height: 10 }
+                                                }
+                                                label: Text {
+                                                    leftPadding: 2
+                                                    text: control.currentText
+                                                    color: st.textPrimary
+                                                    font.family: st.family; font.pixelSize: 11
+                                                    verticalAlignment: Text.AlignVCenter
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        visible: row.canRemember && row.remember && !base.expert && row.item.id !== "mode"
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "на материал и «всегда» запоминает Эксперт"
+                                        color: st.textSecondary
+                                        font.family: st.family; font.pixelSize: 10
+                                    }
+                                    Rectangle {  // the plaque: click shows the rule
+                                        visible: !row.canRemember && !!row.fromRule
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: plaque.implicitWidth + 16; height: 20; radius: 10
+                                        color: st.accentSoft
+                                        border.width: row.ruleOpen ? 1 : 0; border.color: st.borderAccent
+                                        Text {
+                                            id: plaque
+                                            anchors.centerIn: parent
+                                            text: "из ваших правок"
+                                            color: st.accent
+                                            font.family: st.family; font.pixelSize: 10; font.weight: Font.Medium
+                                        }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: row.ruleOpen = !row.ruleOpen }
+                                    }
+                                    Text {
+                                        visible: !row.canRemember && !!row.fromRule && !row.ruleOpen
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: row.fromRule ? "агент предлагал " + base.fmt(row.item, row.fromRule.from) : ""
+                                        color: st.textSecondary
+                                        font.family: st.family; font.pixelSize: 10
+                                    }
+                                }
+                            }
+                            Text {  // the rule behind the plaque
+                                visible: row.ruleOpen && !!row.fromRule && !row.canRemember
+                                width: parent.width
+                                height: visible ? implicitHeight + 8 : 0
+                                leftPadding: 2
+                                wrapMode: Text.Wrap
+                                textFormat: Text.StyledText
+                                linkColor: st.accent
+                                font.family: st.family; font.pixelSize: 11
+                                color: st.textSecondary
+                                text: !row.rule ? "Правило уже удалено. <a href=\"open\">Память агента</a>"
+                                      : "Правило: " + row.rule.key_label + " = " + row.rule.value_text + ", " + row.rule.scope_text
+                                        + ". Создал " + row.rule.role_text + " " + row.rule.created
+                                        + (row.rule.note ? ". «" + row.rule.note + "»" : "")
+                                        + ". Агент предлагал " + base.fmt(row.item, row.fromRule.from) + ". <a href=\"open\">Память агента</a>"
+                                onLinkActivated: base.memory.open()
+                            }
+                            Text {  // the knowledge base said no: the rule will not be kept
+                                visible: row.memoryError !== ""
+                                width: parent.width
+                                height: visible ? implicitHeight + 6 : 0
+                                leftPadding: 2
+                                wrapMode: Text.Wrap
+                                text: "Не запомнится: " + row.memoryError + ". Значение применится только сейчас."
+                                color: st.danger
+                                font.family: st.family; font.pixelSize: 11
+                            }
                             Text {  // the error under the row (mock-up frame 4)
                                 visible: row.problem !== ""
                                 width: parent.width
@@ -328,7 +535,7 @@ Item {
                             color: "white"; border.color: st.border; border.width: 1
                             opacity: rejectArea.pressed ? 0.75 : 1
                             Text { id: rejectText; anchors.centerIn: parent; text: "Отклонить"; color: st.textPrimary; font.family: st.family; font.pixelSize: 15; font.weight: Font.DemiBold }
-                            MouseArea { id: rejectArea; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.answer("reject", "{}", "[]", "") }
+                            MouseArea { id: rejectArea; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.answerRemember("reject", "{}", "[]", "", "[]") }
                         }
                         Rectangle {
                             width: 213; height: 52; radius: 8
