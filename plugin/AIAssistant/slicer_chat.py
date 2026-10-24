@@ -96,6 +96,14 @@ class SlicerChat(QObject):
     def attachmentsJson(self):
         return json.dumps(self._attachments, ensure_ascii=False)
 
+    @pyqtProperty(int, constant=True)
+    def panelWidth(self):
+        return config.get("panel_width")
+
+    @pyqtSlot(int)
+    def savePanelWidth(self, width):
+        config.set_many({"panel_width": int(width)})
+
     @pyqtProperty(bool, constant=True)
     def voiceAvailable(self):
         return voice.is_available()

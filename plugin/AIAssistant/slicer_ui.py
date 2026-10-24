@@ -56,9 +56,22 @@ def mount(name, context, properties=None, in_topbar=False):
     rows.sort(key=lambda r: (abs(r.height() - 30) > 1, -r.x()))
     if rows:
         item.setProperty("orientation", rows[0])
+    family = theme_font_family()
+    if family and item.property("fontFamily") is not None:
+        item.setProperty("fontFamily", family)
     for key, value in (properties or {}).items():
         item.setProperty(key, value)
     return item
+
+
+def theme_font_family():
+    """The family of the slicer theme's default font, so our text matches the
+    rest of the window; "" (the Qt default) when the theme cannot be read."""
+    try:
+        from UM.Qt.Bindings.Theme import Theme
+        return Theme.getInstance().getFont("default").family()
+    except Exception:
+        return ""
 
 
 class SlicerUI(QObject):

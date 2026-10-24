@@ -9,6 +9,10 @@ import QtQuick.Controls.Styles 1.4
 
 Rectangle {
     id: base
+
+    // ---- type: the slicer theme's font (set by slicer_ui.mount) and one size scale
+    property string fontFamily: Qt.application.font.family
+    readonly property var fs: ({ tiny: 10, small: 11, caption: 12, body: 13, title: 14, heading: 16 })
     property var topbar: null
     property var panel: null
     property var proposal: JSON.parse(manager.proposalJson)
@@ -69,13 +73,13 @@ Rectangle {
             Item {  // header: the "?" toggles explanations
                 width: parent.width
                 height: 46
-                Text { x: 20; anchors.verticalCenter: parent.verticalCenter; text: "Предлагаемые изменения"; color: base.ink; font.pixelSize: 13; font.bold: true }
+                Text { x: 20; anchors.verticalCenter: parent.verticalCenter; text: "Предлагаемые изменения"; color: base.ink; font.family: base.fontFamily; font.pixelSize: base.fs.body; font.bold: true }
                 Rectangle {
                     anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
                     width: 24; height: 24; radius: 12
                     color: base.explain ? base.blue : "transparent"
                     border.color: base.explain ? base.blue : "#5A6878"; border.width: 1.5
-                    Text { anchors.centerIn: parent; text: "?"; color: base.explain ? "white" : "#5A6878"; font.pixelSize: 13; font.bold: true }
+                    Text { anchors.centerIn: parent; text: "?"; color: base.explain ? "white" : "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.body; font.bold: true }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: base.explain = !base.explain }
                 }
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: base.blueLine }
@@ -86,9 +90,9 @@ Rectangle {
             Row {  // column titles
                 x: 20
                 spacing: 0
-                Text { width: 170; text: "ПАРАМЕТР"; color: base.muted; font.pixelSize: 10 }
-                Text { width: 120; text: "РЕКОМЕНДАЦИЯ"; color: base.muted; font.pixelSize: 10 }
-                Text { text: "ВАШЕ ЗНАЧЕНИЕ"; color: base.muted; font.pixelSize: 10 }
+                Text { width: 170; text: "ПАРАМЕТР"; color: base.muted; font.family: base.fontFamily; font.pixelSize: base.fs.tiny }
+                Text { width: 120; text: "РЕКОМЕНДАЦИЯ"; color: base.muted; font.family: base.fontFamily; font.pixelSize: base.fs.tiny }
+                Text { text: "ВАШЕ ЗНАЧЕНИЕ"; color: base.muted; font.family: base.fontFamily; font.pixelSize: base.fs.tiny }
             }
 
             Item { width: 1; height: 6 }
@@ -126,7 +130,7 @@ Rectangle {
                         visible: row.firstInGroup
                         x: 16; width: parent.width - 32; height: visible ? 26 : 0
                         color: "#F4F6F9"
-                        Text { x: 6; anchors.verticalCenter: parent.verticalCenter; text: (row.item.group || "").toUpperCase(); color: "#5A6878"; font.pixelSize: 10; font.bold: true }
+                        Text { x: 6; anchors.verticalCenter: parent.verticalCenter; text: (row.item.group || "").toUpperCase(); color: "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.tiny; font.bold: true }
                     }
 
                     Item {
@@ -140,7 +144,7 @@ Rectangle {
                             text: row.item.label
                             elide: Text.ElideRight
                             color: row.item.error ? "#B42318" : base.ink
-                            font.pixelSize: 12
+                            font.family: base.fontFamily; font.pixelSize: base.fs.caption
                             font.bold: row.userChanged
                         }
                         Text {
@@ -149,7 +153,7 @@ Rectangle {
                             text: base.fmt(row.item, row.item.proposed)
                             elide: Text.ElideRight
                             color: parent.differs ? base.blue : base.muted
-                            font.pixelSize: 12
+                            font.family: base.fontFamily; font.pixelSize: base.fs.caption
                         }
 
                         Rectangle {  // "your value": number field with unit and arrows, or a list
@@ -165,7 +169,7 @@ Rectangle {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: row.item.proposed === null || row.item.proposed === undefined ? "" : base.num(row.item.proposed)
                                 color: parent.parent.differs || row.userChanged ? base.blue : base.ink
-                                font.pixelSize: 13
+                                font.family: base.fontFamily; font.pixelSize: base.fs.body
                                 selectByMouse: true
                                 clip: true
                                 onTextChanged: row.userChanged = String(row.edited()) !== String(row.item.proposed)
@@ -175,14 +179,14 @@ Rectangle {
                                 anchors.right: arrows.left; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
                                 text: row.item.unit || ""
                                 color: base.muted
-                                font.pixelSize: 11
+                                font.family: base.fontFamily; font.pixelSize: base.fs.small
                             }
                             Column {
                                 id: arrows
                                 visible: !row.hasOptions && (row.item.type === "int" || row.item.type === "float")
                                 anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
-                                Text { text: "▴"; color: "#5A6878"; font.pixelSize: 10; MouseArea { anchors.fill: parent; anchors.margins: -2; onClicked: row.step(1) } }
-                                Text { text: "▾"; color: "#5A6878"; font.pixelSize: 10; MouseArea { anchors.fill: parent; anchors.margins: -2; onClicked: row.step(-1) } }
+                                Text { text: "▴"; color: "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.tiny; MouseArea { anchors.fill: parent; anchors.margins: -2; onClicked: row.step(1) } }
+                                Text { text: "▾"; color: "#5A6878"; font.family: base.fontFamily; font.pixelSize: base.fs.tiny; MouseArea { anchors.fill: parent; anchors.margins: -2; onClicked: row.step(-1) } }
                             }
 
                             ComboBox {
@@ -201,7 +205,7 @@ Rectangle {
                                     label: Text {
                                         text: control.currentText
                                         color: (!row.item.unchanged || row.userChanged) ? base.blue : base.ink
-                                        font.pixelSize: 13
+                                        font.family: base.fontFamily; font.pixelSize: base.fs.body
                                         verticalAlignment: Text.AlignVCenter
                                         elide: Text.ElideRight
                                     }
@@ -215,7 +219,7 @@ Rectangle {
                         x: 22; width: parent.width - 44
                         height: visible ? implicitHeight + 6 : 0
                         wrapMode: Text.Wrap
-                        font.pixelSize: 11
+                        font.family: base.fontFamily; font.pixelSize: base.fs.small
                         color: row.item.error ? "#B42318" : (row.item.warning && !base.explain ? "#9A6A00" : base.muted)
                         text: {
                             var parts = [];
@@ -240,13 +244,13 @@ Rectangle {
                     text: "Вопрос или правку можно написать в чат"
                     wrapMode: Text.Wrap
                     color: base.muted
-                    font.pixelSize: 10
+                    font.family: base.fontFamily; font.pixelSize: base.fs.tiny
                 }
                 Text {
                     anchors.right: applyButton.left; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
                     text: "Отклонить"
                     color: "#5A6878"
-                    font.pixelSize: 12
+                    font.family: base.fontFamily; font.pixelSize: base.fs.caption
                     MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: manager.answer("reject", "{}", "[]", "") }
                 }
                 Rectangle {
@@ -254,7 +258,7 @@ Rectangle {
                     anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
                     width: 190; height: 44; radius: 10
                     color: applyArea.pressed ? "#1659B0" : base.blue
-                    Text { anchors.centerIn: parent; text: "Применить изменения"; color: "white"; font.pixelSize: 14; font.bold: true }
+                    Text { anchors.centerIn: parent; text: "Применить изменения"; color: "white"; font.family: base.fontFamily; font.pixelSize: base.fs.title; font.bold: true }
                     MouseArea { id: applyArea; anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: base.apply() }
                 }
             }

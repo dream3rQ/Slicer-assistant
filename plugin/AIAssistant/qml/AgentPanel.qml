@@ -21,7 +21,14 @@ Rectangle {
     readonly property color muted: "#8A94A3"
     readonly property color danger: "#B42318"
 
-    width: 340
+    // ---- type: the slicer theme's font (set by slicer_ui.mount) and one size scale
+    property string fontFamily: Qt.application.font.family
+    readonly property var fs: ({ tiny: 10, small: 11, caption: 12, body: 13, title: 14, heading: 16 })
+
+    // the user drags the left edge; slicer_chat keeps the width in the settings
+    readonly property int minWidth: 300
+    readonly property int maxWidth: parent ? Math.max(minWidth, parent.width * 0.6) : 700
+    width: Math.max(minWidth, Math.min(maxWidth, manager.panelWidth))
     x: parent ? parent.width - width : 0
     y: topbar ? topbar.y + topbar.height : 0
     height: parent ? parent.height - y : 600
@@ -37,6 +44,24 @@ Rectangle {
     // swallow clicks and wheel so they do not reach the 3D view underneath
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: wheel.accepted = true }
 
+    // resize handle on the left edge
+    MouseArea {
+        id: grip
+        width: 8; height: parent.height; x: -3; z: 10
+        cursorShape: Qt.SizeHorCursor
+        hoverEnabled: true
+        property real startX: 0
+        property real startWidth: 0
+        onPressed: { startX = mapToItem(null, mouse.x, 0).x; startWidth = base.width }
+        onPositionChanged: {
+            if (!pressed) return;
+            var w = startWidth + startX - mapToItem(null, mouse.x, 0).x;
+            base.width = Math.max(base.minWidth, Math.min(base.maxWidth, w));
+        }
+        onReleased: manager.savePanelWidth(base.width)
+        Rectangle { x: 3; width: 2; height: parent.height; color: base.blue; visible: grip.containsMouse || grip.pressed }
+    }
+
     // ---- state built from the session's events
     property var callRows: ({})
     property var proposalRows: ({})
@@ -47,6 +72,7 @@ Rectangle {
     property var attachments: JSON.parse(manager.attachmentsJson)
 
     function addRow(row) {
+        if (row.files === undefined) row.files = "";
         messages.append(row);
         list.positionViewAtEnd();
         return messages.count - 1;
@@ -57,9 +83,9 @@ Rectangle {
         if (ev.type !== "thinking") thinking = "";
         switch (ev.type) {
         case "user":
-            var names = (d.attachments || []).map(function (a) { return a.name; }).join(", ");
-            if (d.hint) names = (d.hint.indexOf("5D") >= 0 ? "режим 5D" : "режим 3D") + (names ? " · " + names : "");
-            addRow({ kind: "user", text: d.text || "", extra: names, summary: "", details: "" }); break;
+            var files = (d.attachments || []).map(function (a) { return a.name; }).join("\n");
+            var modeLabel = d.hint ? (d.hint.indexOf("5D") >= 0 ? "режим 5D" : "режим 3D") : "";
+            addRow({ kind: "user", text: d.text || "", extra: modeLabel, files: files, summary: "", details: "" }); break;
         case "assistant":
             addRow({ kind: "assistant", text: d.html || "", extra: "", summary: "", details: "" }); break;
         case "note": case "status":
@@ -120,7 +146,7 @@ Rectangle {
         id: header
         width: parent.width
         height: 44
-        Text { anchors.verticalCenter: parent.verticalCenter; x: 18; text: "Stereo Agent"; color: base.blue; font.pixelSize: 14 }
+        Text { anchors.verticalCenter: parent.verticalCenter; x: 18; text: "Stereo Agent"; color: base.blue; font.family: base.fontFamily; font.pixelSize: base.fs.title }
         Row {
             anchors.right: parent.right
             anchors.rightMargin: 10
@@ -154,7 +180,7 @@ Rectangle {
             width: 44; height: 44; radius: 22; color: base.blueSoft
             Text { anchors.centerIn: parent; text: "⚙"; color: base.blue; font.pixelSize: 26 }
         }
-        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "С чем поработаем сегодня?"; color: base.ink; font.pixelSize: 16 }
+        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "С чем поработаем сегодня?"; color: base.ink; font.family: base.fontFamily; font.pixelSize: base.fs.heading }
         Item { width: 1; height: 4 }
         QuickGroup {
             title: "Подобрать конкретный параметр"
@@ -195,12 +221,20 @@ Rectangle {
                     Rectangle {
                         id: bubble
                         anchors.right: parent.right
-                        width: Math.min(parent.width * 0.88, Math.max(userText.implicitWidth, att.implicitWidth) + 24)
-                        height: userText.height + (att.visible ? att.height + 2 : 0) + 16
+                        width: Math.min(parent.width * 0.88, model.files !== "" ? parent.width * 0.88 : Math.max(userMetrics.advanceWidth + 2, att.implicitWidth) + 24)
+                        height: bubbleCol.height + 16
                         radius: 12
                         color: base.blueSoft
-                        Text { id: userText; x: 12; y: 8; width: parent.width - 24; text: model.text; wrapMode: Text.Wrap; color: base.ink; font.pixelSize: 13 }
-                        Text { id: att; anchors.top: userText.bottom; anchors.topMargin: 2; x: 12; text: model.extra; visible: model.extra !== ""; color: base.blue; font.pixelSize: 11 }
+                        TextMetrics { id: userMetrics; text: model.text; font: userText.font }
+                        Column {
+                            id: bubbleCol
+                            x: 12; y: 8
+                            width: parent.width - 24
+                            spacing: 4
+                            Text { id: userText; width: parent.width; visible: model.text !== ""; text: model.text; wrapMode: Text.Wrap; color: base.ink; font.family: base.fontFamily; font.pixelSize: base.fs.body }
+                            FileChips { id: sentFiles; width: parent.width; names: model.files ? model.files.split("\n") : []; visible: model.files !== ""; fill: "white"; panel: base }
+                            Text { id: att; text: model.extra; visible: model.extra !== ""; color: base.blue; font.family: base.fontFamily; font.pixelSize: base.fs.small }
+                        }
                     }
                 }
                 Text {  // assistant answer, rich text prepared by slicer_chat.markdown_html
@@ -210,7 +244,7 @@ Rectangle {
                     textFormat: Text.RichText
                     wrapMode: Text.Wrap
                     color: base.ink
-                    font.pixelSize: 13
+                    font.family: base.fontFamily; font.pixelSize: base.fs.body
                 }
                 Text {  // note, error, usage
                     visible: kind === "note" || kind === "error" || kind === "usage"
@@ -218,7 +252,7 @@ Rectangle {
                     text: visible ? model.text : ""
                     wrapMode: Text.Wrap
                     font.italic: kind === "note"
-                    font.pixelSize: kind === "usage" ? 10 : 12
+                    font.family: base.fontFamily; font.pixelSize: kind === "usage" ? base.fs.tiny : base.fs.caption
                     color: kind === "error" ? base.danger : base.muted
                 }
                 Text {  // tool call; click shows the raw result
@@ -226,7 +260,7 @@ Rectangle {
                     width: parent.width
                     text: (rowItem.expanded ? "▾ " : "▸ ") + model.text + " → " + model.summary
                     elide: Text.ElideRight
-                    font.pixelSize: 11
+                    font.family: base.fontFamily; font.pixelSize: base.fs.small
                     color: model.extra === "fail" ? base.danger : base.muted
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: rowItem.expanded = !rowItem.expanded }
                 }
@@ -236,7 +270,7 @@ Rectangle {
                     height: visible ? 140 : 0
                     readOnly: true
                     text: visible ? model.details : ""
-                    font.pixelSize: 10
+                    font.family: base.fontFamily; font.pixelSize: base.fs.tiny
                 }
                 Rectangle {  // the plan card's trace in the chat
                     visible: kind === "proposal"
@@ -249,12 +283,12 @@ Rectangle {
                         id: pr
                         anchors.fill: parent
                         anchors.margins: 8
-                        Text { text: model.text + (model.summary ? " — " + model.summary : ""); wrapMode: Text.Wrap; Layout.fillWidth: true; color: base.ink; font.pixelSize: 12 }
+                        Text { text: model.text + (model.summary ? " — " + model.summary : ""); wrapMode: Text.Wrap; Layout.fillWidth: true; color: base.ink; font.family: base.fontFamily; font.pixelSize: base.fs.caption }
                         Text {
                             visible: model.extra === "open"
                             text: "Показать"
                             color: base.blue
-                            font.pixelSize: 12
+                            font.family: base.fontFamily; font.pixelSize: base.fs.caption
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.showCard() }
                         }
                     }
@@ -268,7 +302,7 @@ Rectangle {
                 verticalAlignment: Text.AlignBottom
                 color: base.muted
                 font.italic: true
-                font.pixelSize: 12
+                font.family: base.fontFamily; font.pixelSize: base.fs.caption
             }
         }
     }
@@ -307,7 +341,7 @@ Rectangle {
             anchors.centerIn: parent
             spacing: 8
             Text { anchors.horizontalCenter: parent.horizontalCenter; text: "⇪"; color: base.blueLine; font.pixelSize: 40 }
-            Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Перетащите файлы"; color: base.blueLine; font.pixelSize: 14; font.bold: true }
+            Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Перетащите файлы"; color: base.blueLine; font.family: base.fontFamily; font.pixelSize: base.fs.title; font.bold: true }
         }
     }
 
@@ -328,26 +362,17 @@ Rectangle {
             text: "Жду решения по карточке. Сообщение отсюда уйдёт как уточнение."
             wrapMode: Text.Wrap
             color: base.blue
-            font.pixelSize: 11
+            font.family: base.fontFamily; font.pixelSize: base.fs.small
         }
 
-        Flow {
+        FileChips {
             width: parent.width
-            spacing: 6
             visible: base.attachments.length > 0
-            Repeater {
-                model: base.attachments
-                delegate: Rectangle {
-                    height: 24; radius: 12; color: base.blueSoft
-                    width: chipText.implicitWidth + 30
-                    Text { id: chipText; x: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; color: base.blue; font.pixelSize: 11 }
-                    Text {
-                        anchors.right: parent.right; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
-                        text: "×"; color: base.blue; font.pixelSize: 14
-                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: manager.removeAttachment(modelData.id) }
-                    }
-                }
-            }
+            names: base.attachments.map(function (a) { return a.name; })
+            ids: base.attachments.map(function (a) { return a.id; })
+            fill: base.blueSoft
+            panel: base
+            onRemove: manager.removeAttachment(id)
         }
 
         Rectangle {
@@ -365,7 +390,7 @@ Rectangle {
                 frameVisible: false
                 backgroundVisible: false
                 wrapMode: TextEdit.Wrap
-                font.pixelSize: 13
+                font.family: base.fontFamily; font.pixelSize: base.fs.body
                 Keys.onReturnPressed: {
                     if (event.modifiers & Qt.ShiftModifier) { event.accepted = false; return; }
                     base.send(); event.accepted = true;
@@ -378,7 +403,7 @@ Rectangle {
                 visible: input.text === "" && !input.activeFocus
                 text: "Спросить Стерео..."
                 color: base.muted
-                font.pixelSize: 13
+                font.family: base.fontFamily; font.pixelSize: base.fs.body
             }
 
             Row {

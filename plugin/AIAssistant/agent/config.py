@@ -17,9 +17,10 @@ DEFAULTS = OrderedDict([
     ("results_dir", ""),      # empty = ~/Documents/STE AI Assistant/results
     ("dev_mode", False),      # enables /api/debug/eval
     ("compact_history", True),  # shorten old tool results / drop resent images (see Session._request_messages)
-    ("confirm_plan", True),
-    ("slicer_popups", True),
-    ("panel_open", True),     # the Stereo Agent panel was open when the slicer closed  # also show the plan card and notifications inside the slicer (slicer_ui.py)   # show apply_plan as a card and wait for "Применить" (see Session._confirm_plan)
+    ("confirm_plan", True),   # show apply_plan as a card and wait for "Применить" (see Session._confirm_plan)
+    ("slicer_popups", True),  # also show the plan card and notifications inside the slicer (slicer_ui.py)
+    ("panel_open", True),     # the Stereo Agent panel was open when the slicer closed
+    ("panel_width", 340),     # the panel's width after the user dragged its left edge
 ])
 
 
