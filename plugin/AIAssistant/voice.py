@@ -34,7 +34,7 @@ MAX_RECORD_SEC = 300              # a forgotten recording is dropped after this
 # Vocabulary hint for the speech model, so print terms come out spelled right.
 # Kept to one short sentence: on short recordings the model sometimes echoes
 # the prompt into the text (see _strip_prompt_echo).
-TRANSCRIBE_PROMPT = ("STE Slicer, 3D-печать: Proto PLA, Enduse PETG, Fiberpart PA12, Sealant TPU, режимы 5D и "
+TRANSCRIBE_PROMPT = ("Стерео, STE Slicer, 3D-печать: Proto PLA, Enduse PETG, Fiberpart PA12, Sealant TPU, режимы 5D и "
                      "5D Spiral, высота слоя, поддержки, кайма, ретракт.")
 
 
@@ -110,6 +110,7 @@ class _Recorder(object):
         self._thread = None
         self._started = None
         self._timer = None
+        self._bits = 16
 
     # MCI calls all go through one thread, whoever asks for them.
     def _run(self, fn):
@@ -172,6 +173,7 @@ class _Recorder(object):
                 self._close()
                 self._mci("open new type waveaudio alias " + self.ALIAS)
                 try:
+                    self._bits = 16 if rate else 8
                     if rate:
                         align = 2 * channels
                         self._mci("set %s time format ms bitspersample 16 channels %d samplespersec %d "
@@ -210,6 +212,22 @@ class _Recorder(object):
                     pass
 
         self._disarm_timer()
+        return self._run(job)
+
+    def level(self):
+        """The current input peak while recording (MCI "status level"), as a
+        fraction of full scale, or None when the device does not report it."""
+        def job():
+            if self._started is None:
+                return None
+            try:
+                value = int(self._mci("status %s level" % self.ALIAS) or 0)
+            except (VoiceError, ValueError):
+                return None
+            return value / (32767.0 if self._bits == 16 else 127.0)
+
+        if not is_available():
+            return None
         return self._run(job)
 
     def cancel(self):
@@ -251,6 +269,40 @@ recorder = _Recorder()
 start = recorder.start
 stop = recorder.stop
 cancel = recorder.cancel
+level = recorder.level
+
+
+class SilenceDetector(object):
+    """Ends dictation after a pause: fed the input level every ~0.25 s, says
+    "stop" once speech was heard and then `pause` seconds passed below the
+    speech threshold. The threshold follows the room's noise floor. If the
+    device reports no level, or the level never moves, it never stops on its
+    own and the user stops with the button."""
+
+    def __init__(self, pause=4.0):
+        self.pause = pause
+        self.floor = None
+        self.heard = False
+        self.quiet_since = None
+
+    def feed(self, value, now):
+        if value is None:
+            return False
+        # noise floor: follows quiet levels at once, louder ones only slowly
+        if self.floor is None or value < self.floor:
+            self.floor = value
+        else:
+            self.floor += (value - self.floor) * 0.01
+        speaking = value > max(self.floor * 3, self.floor + 0.04)
+        if speaking:
+            self.heard = True
+            self.quiet_since = None
+            return False
+        if not self.heard:
+            return False
+        if self.quiet_since is None:
+            self.quiet_since = now
+        return now - self.quiet_since >= self.pause
 
 
 # ---------- speech to text
@@ -334,7 +386,19 @@ def transcribe(audio, mime="audio/wav"):
         text = json.loads(raw).get("text", "")
     except (ValueError, AttributeError):
         text = raw  # response_format=text on some gateways
-    return {"text": _strip_prompt_echo(text or ""), "model": model}
+    return {"text": strip_address(_strip_prompt_echo(text or "")), "model": model}
+
+
+_ADDRESS = re.compile(r"^\s*(?:(?:эй|слушай|ок|окей|привет)[\s,]+)?стерео\b[\s,.!:;—–-]*", re.IGNORECASE)
+
+
+def strip_address(text):
+    """"Стерео, сделай …" → "Сделай …": the assistant's name at the start of a
+    phrase is an address, not part of the request."""
+    rest = _ADDRESS.sub("", text, count=1)
+    if rest == text or not rest:
+        return text
+    return rest[:1].upper() + rest[1:]
 
 
 def _words(text):

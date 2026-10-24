@@ -8,8 +8,9 @@ import json
 import os
 import re
 import threading
+import time
 
-from PyQt5.QtCore import QEvent, QObject, QPointF, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QEvent, QObject, QPointF, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 
 from . import voice
 from .agent import config, llm, session as session_module
@@ -17,6 +18,8 @@ from .slicer_ui import mount
 
 # The 3D / 5D chips under the input: an explicit choice the agent must follow (see prompt.py).
 # The hint goes to the LLM only; the chat shows the chip.
+SILENCE_PAUSE_SEC = 4.0   # dictation ends by itself after this long without speech
+
 MODE_HINTS = {"3D": "Режим печати: 3D (classic), выбран пользователем.",
               "5D": "Режим печати: 5D, выбран пользователем; Spiral или полный 5D выбери по детали."}
 
@@ -60,6 +63,10 @@ class SlicerChat(QObject):
         self._busy = False
         self._attachments = []
         self._voice = ""   # "" | "recording" | "transcribing"
+        self._silence = None
+        self._listenTimer = QTimer(self)
+        self._listenTimer.setInterval(250)
+        self._listenTimer.timeout.connect(self._listen)
         self._event.connect(self._onEvent)
         self._done.connect(self._onDone)
         session_module.LISTENERS.append(self._event.emit)
@@ -94,17 +101,23 @@ class SlicerChat(QObject):
         a drop area of its own that opens files on the build plate; filtering the
         window's drag events here catches them before any QML item sees them."""
         kind = event.type()
+        panel = self._panel
+        if kind in (QEvent.MouseMove, QEvent.MouseButtonRelease, QEvent.Leave, QEvent.FocusIn):
+            # an ordinary mouse event means no drag is going on any more
+            if panel is not None and panel.property("fileDrag"):
+                panel.setProperty("fileDrag", False)
+            return False
         if kind not in (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop):
             return False
-        panel = self._panel
         over = False
         if panel is not None and panel.property("visible") and kind != QEvent.DragLeave and event.mimeData().hasUrls():
             top_left = panel.mapToScene(QPointF(0, 0))
             pos = event.pos()
             over = (top_left.x() <= pos.x() < top_left.x() + panel.width()
                     and top_left.y() <= pos.y() < top_left.y() + panel.height())
-        if panel is not None and bool(panel.property("fileDrag")) != over:
-            panel.setProperty("fileDrag", over)
+        dragging = over and kind != QEvent.Drop   # the zone goes away as soon as the files are dropped
+        if panel is not None and bool(panel.property("fileDrag")) != dragging:
+            panel.setProperty("fileDrag", dragging)
         if not over:
             return False
         if kind == QEvent.Drop:
@@ -182,7 +195,10 @@ class SlicerChat(QObject):
             if self._voice == "":
                 voice.start()
                 self._setVoice("recording")
+                self._silence = voice.SilenceDetector(SILENCE_PAUSE_SEC)
+                self._listenTimer.start()
                 return
+            self._listenTimer.stop()
             audio = voice.stop()
         except Exception as e:
             self._setVoice("")
@@ -197,8 +213,21 @@ class SlicerChat(QObject):
                 self._done.emit("voice", json.dumps({"error": str(e)}))
         threading.Thread(target=work, daemon=True).start()
 
+    def _listen(self):
+        """While recording: stop by itself after a pause in speech."""
+        if self._voice != "recording":
+            self._listenTimer.stop()
+            return
+        try:
+            value = voice.level()
+        except Exception:
+            value = None
+        if self._silence.feed(value, time.time()):
+            self.toggleVoice()
+
     @pyqtSlot()
     def cancelVoice(self):
+        self._listenTimer.stop()
         if self._voice == "recording":
             try:
                 voice.cancel()

@@ -542,11 +542,11 @@ Rectangle {
                     RoundButton {
                         visible: manager.voiceAvailable
                         // recording: a red microphone stops it; the square is only for stopping the agent
-                        icon: manager.voiceState === "" ? "mic" : manager.voiceState === "recording" ? "mic_white" : ""
-                        label: "…"
+                        icon: manager.voiceState === "recording" ? "mic_white" : "mic"
+                        spinning: manager.voiceState === "transcribing"
                         fill: manager.voiceState === "recording" ? st.danger : st.micBg
                         fg: manager.voiceState === "recording" ? "white" : st.textInk
-                        tip: manager.voiceState === "recording" ? "Остановить запись" : "Голос: нажмите и говорите, нажмите ещё раз — текст появится в поле (Esc — отмена)"
+                        tip: manager.voiceState === "recording" ? "Остановить запись (сама остановится после паузы в 4 секунды)" : "Голос: нажмите и говорите. Запись остановится после паузы в 4 секунды, текст появится в поле (Esc — отмена)"
                         onClicked: manager.toggleVoice()
                     }
                     RoundButton {
