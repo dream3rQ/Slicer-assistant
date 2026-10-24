@@ -192,16 +192,24 @@ def event_row(event):
     key, action = event.get("key"), event.get("action")
     part = event.get("part") if isinstance(event.get("part"), dict) else {}
     if action == "rollback":
-        change = "правил было %s, стало %s" % (event.get("proposed"), event.get("chosen"))
+        change = "правил: %s → %s" % (event.get("proposed"), event.get("chosen"))
     elif action == "rule_delete":
         change = value_text(key, event.get("chosen") if event.get("proposed") is None else event.get("proposed")) + " → удалено"
     elif action in ("rule_add", "rule_edit", "rule_off") and event.get("proposed") is None:
         change = value_text(key, event.get("chosen"))
     else:
         change = value_text(key, event.get("proposed")) + " → " + value_text(key, event.get("chosen"))
-    row.update({"when": when(event.get("ts")), "part_text": part.get("name") or "",
-                "material_text": material_label(event.get("material")),
-                "mode_text": MODE_LABELS.get(event.get("mode"), event.get("mode") or ""),
+    material, mode, part_name = event.get("material"), event.get("mode"), part.get("name")
+    rule = event.get("rule") if isinstance(event.get("rule"), dict) else {}
+    if rule and not (material or mode or part_name):
+        # a change made in this window has no part in front of it: show the rule's own scope
+        scope, value = rule.get("scope"), rule.get("scope_value")
+        material = value if scope == "material" else None
+        mode = value if scope == "mode" else None
+        part_name = rule.get("part_name") if scope == "part" else None
+    row.update({"when": when(event.get("ts")), "part_text": part_name or "",
+                "material_text": material_label(material),
+                "mode_text": MODE_LABELS.get(mode, mode or ""),
                 "key_label": key_label(key) if key else (event.get("reason") or ""),
                 "change": change, "role_text": ROLE_LABELS.get(event.get("role"), event.get("role") or ""),
                 "action_text": ACTION_LABELS.get(action, action or "")})
@@ -215,6 +223,13 @@ def _filter(flt_json):
     if period in PERIODS:
         flt["from_ts"] = time.time() - PERIODS[period]
     return {k: v for k, v in flt.items() if v not in (None, "")}
+
+
+def _by_label(rows, sort):
+    """Sorting by setting goes by the name the window shows, not by the slicer key."""
+    if (sort or {}).get("by") != "key":
+        return rows
+    return sorted(rows, key=lambda r: (r.get("key_label") or "").lower(), reverse=bool(sort.get("desc")))
 
 
 class MemoryBridge(QObject):
@@ -251,13 +266,15 @@ class MemoryBridge(QObject):
     # ---- reading
     @pyqtSlot(str, str, result=str)
     def rules(self, flt_json, sort_json):
-        rows = backend.list_rules(_filter(flt_json), json.loads(sort_json or "{}"))
-        return json.dumps([rule_row(r) for r in rows], ensure_ascii=False)
+        sort = json.loads(sort_json or "{}")
+        rows = _by_label([rule_row(r) for r in backend.list_rules(_filter(flt_json), sort)], sort)
+        return json.dumps(rows, ensure_ascii=False)
 
     @pyqtSlot(str, str, result=str)
     def events(self, flt_json, sort_json):
-        rows = backend.list_events(_filter(flt_json), json.loads(sort_json or "{}"))
-        return json.dumps([event_row(e) for e in rows], ensure_ascii=False)
+        sort = json.loads(sort_json or "{}")
+        rows = _by_label([event_row(e) for e in backend.list_events(_filter(flt_json), sort)], sort)
+        return json.dumps(rows, ensure_ascii=False)
 
     @pyqtSlot(str, result=str)
     def rule(self, rule_id):

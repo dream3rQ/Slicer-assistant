@@ -1,7 +1,7 @@
 {
     "name": "AI Assistant",
     "author": "Team",
-    "version": "0.7.1",
+    "version": "0.7.2",
     "description": "LLM chat assistant for STE Slicer: picks print mode, profile, material and settings, places the model and slices it.",
     "api": 5,
     "i18n-catalog": "steslicer"

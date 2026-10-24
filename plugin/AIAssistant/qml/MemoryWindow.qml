@@ -13,7 +13,7 @@ Window {
     id: win
     property var memory: null
     title: "Память агента"
-    width: 1120; height: 660
+    width: 1000; height: 640
     minimumWidth: 900; minimumHeight: 460
     flags: Qt.Dialog
     color: "white"
@@ -112,12 +112,12 @@ Window {
 
     readonly property var ruleColumns: [
         { title: "Настройка", field: "key_label", sort: "key", flex: 1.5 },
-        { title: "Значение", field: "value_text", w: 96, strong: true },
-        { title: "Область", field: "scope_text", sort: "material", flex: 1.6 },
-        { title: "Статус", field: "status_text", sort: "status", w: 104, kind: "status" },
-        { title: "Кто создал", field: "role_text", sort: "role", w: 92 },
-        { title: "Когда", field: "when", sort: "ts", w: 116 },
-        { title: "", kind: "actions", w: 200 }
+        { title: "Значение", field: "value_text", w: 98, strong: true },
+        { title: "Область", field: "scope_text", sort: "material", flex: 1.75 },
+        { title: "Статус", field: "status_text", sort: "status", w: 107, kind: "status" },
+        { title: "Кто создал", field: "role_text", sort: "role", w: 103 },
+        { title: "Когда", field: "when", sort: "ts", w: 136 },
+        { title: "", kind: "actions", w: 160 }
     ]
     readonly property var eventColumns: [
         { title: "Когда", field: "when", sort: "ts", w: 116 },
@@ -127,7 +127,7 @@ Window {
         { title: "Настройка", field: "key_label", sort: "key", flex: 1.4 },
         { title: "Агент → вы", field: "change", flex: 1.3, strong: true },
         { title: "Кто", field: "role_text", sort: "role", w: 76 },
-        { title: "Что", field: "action_text", sort: "action", w: 124, kind: "action" },
+        { title: "Что", field: "action_text", sort: "action", w: 138, kind: "action" },
         { title: "", kind: "rollback", w: 112 }
     ]
     readonly property var columns: tab === "rules" ? ruleColumns : eventColumns
@@ -165,12 +165,6 @@ Window {
             anchors.right: parent.right; anchors.rightMargin: 24
             anchors.verticalCenter: parent.verticalCenter
             spacing: 12
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: win.expert ? "правила на материал и «всегда»" : "запоминает только для детали"
-                color: st.textSecondary
-                font.family: st.family; font.pixelSize: 11
-            }
             Rectangle {  // Новичок / Эксперт, in the style of the 3D/5D pill
                 id: rolePill
                 anchors.verticalCenter: parent.verticalCenter
@@ -328,14 +322,6 @@ Window {
                             color: parent.sorted ? st.accent : st.textSecondary
                             font.family: st.family; font.pixelSize: 10; font.weight: parent.sorted ? Font.DemiBold : Font.Normal
                         }
-                        Icon {
-                            visible: parent.sorted
-                            x: colTitle.implicitWidth + 4
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 9; height: 9
-                            name: "chevron_down"
-                            rotation: parent.sort.desc ? 0 : 180
-                        }
                         MouseArea {
                             visible: !!modelData.sort
                             width: colTitle.implicitWidth + 16; height: parent.height
@@ -399,35 +385,75 @@ Window {
                                         font.family: st.family; font.pixelSize: 11; font.weight: Font.Medium
                                     }
                                 }
-                                Row {  // rule actions
+                                Item {  // rule actions: on/off switch, edit, delete (as in the mock-up)
                                     visible: cell.col.kind === "actions"
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    spacing: 14
-                                    Repeater {
-                                        model: win.confirmDelete === line.r.id
-                                               ? [{ id: "ask", label: "Удалить правило?" }, { id: "yes", label: "Да" }, { id: "no", label: "Нет" }]
-                                               : [{ id: "edit", label: "Изменить" },
-                                                  { id: "toggle", label: line.r.status === "active" ? "Выключить" : "Включить" },
-                                                  { id: "delete", label: "Удалить" }]
-                                        delegate: Text {
-                                            text: modelData.label
-                                            color: modelData.id === "ask" ? st.textPrimary
-                                                 : modelData.id === "delete" || modelData.id === "yes" ? st.danger : st.accent
-                                            font.family: st.family; font.pixelSize: 12
-                                            font.weight: modelData.id === "ask" ? Font.Normal : Font.Medium
+                                    width: parent.width; height: parent.height
+                                    readonly property bool asking: win.confirmDelete === line.r.id
+                                    Rectangle {  // the switch: on = the rule is used (active or a candidate)
+                                        id: toggle
+                                        visible: !parent.asking
+                                        x: 0; anchors.verticalCenter: parent.verticalCenter
+                                        width: 32; height: 18; radius: 9
+                                        readonly property bool on: line.r.status !== "disabled"
+                                        color: on ? st.accentSoft : st.tertiaryBg
+                                        border.width: 1; border.color: on ? st.borderAccent : st.border
+                                        Rectangle {
+                                            x: toggle.on ? toggle.width - width - 2 : 2; y: 2
+                                            width: 14; height: 14; radius: 7
+                                            color: toggle.on ? st.accent : "white"
+                                            border.width: toggle.on ? 0 : 1; border.color: st.border
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent; anchors.margins: -6
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: win.act(win.memory.setRuleEnabled(line.r.id, !toggle.on),
+                                                               toggle.on ? "Правило выключено" : "Правило включено")
+                                        }
+                                    }
+                                    Icon {
+                                        visible: !parent.asking
+                                        x: 66; anchors.verticalCenter: parent.verticalCenter
+                                        width: 16; height: 16
+                                        name: "pencil"
+                                        opacity: line.isEditing ? 1 : editArea.containsMouse ? 0.85 : 0.7
+                                        MouseArea {
+                                            id: editArea
+                                            anchors.fill: parent; anchors.margins: -8
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: { win.editError = ""; win.editing = win.editing === line.r.id ? "" : line.r.id; win.confirmDelete = "" }
+                                        }
+                                    }
+                                    Icon {
+                                        visible: !parent.asking
+                                        x: 118; anchors.verticalCenter: parent.verticalCenter
+                                        width: 16; height: 16
+                                        name: "trash"
+                                        MouseArea {
+                                            anchors.fill: parent; anchors.margins: -8
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: { win.confirmDelete = line.r.id; win.editing = "" }
+                                        }
+                                    }
+                                    Row {  // "Удалить? Да Нет" in place of the icons
+                                        visible: parent.asking
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: 12
+                                        Text { text: "Удалить?"; color: st.textPrimary; font.family: st.family; font.pixelSize: 12 }
+                                        Text {
+                                            text: "Да"; color: st.danger
+                                            font.family: st.family; font.pixelSize: 12; font.weight: Font.DemiBold
                                             MouseArea {
-                                                visible: modelData.id !== "ask"
-                                                anchors.fill: parent; anchors.margins: -4
+                                                anchors.fill: parent; anchors.margins: -6
                                                 cursorShape: Qt.PointingHandCursor
-                                                onClicked: {
-                                                    var id = line.r.id;
-                                                    if (modelData.id === "edit") { win.editError = ""; win.editing = win.editing === id ? "" : id; }
-                                                    else if (modelData.id === "toggle") win.act(win.memory.setRuleEnabled(id, line.r.status !== "active"));
-                                                    else if (modelData.id === "delete") win.confirmDelete = id;
-                                                    else if (modelData.id === "yes") { win.confirmDelete = ""; win.act(win.memory.deleteRule(id), "Правило удалено. Вернуть можно откатом в журнале."); }
-                                                    else win.confirmDelete = "";
-                                                }
+                                                onClicked: { var id = line.r.id; win.confirmDelete = "";
+                                                             win.act(win.memory.deleteRule(id), "Правило удалено. Вернуть можно откатом в журнале.") }
                                             }
+                                        }
+                                        Text {
+                                            text: "Нет"; color: st.accent
+                                            font.family: st.family; font.pixelSize: 12; font.weight: Font.Medium
+                                            MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: win.confirmDelete = "" }
                                         }
                                     }
                                 }
@@ -477,9 +503,11 @@ Window {
                         var fields = { value: win.parseValue(valueField.text, line.r.value), scope: scope, note: noteField.text.trim() };
                         if (scope === "material" || scope === "mode") fields.scope_value = scopeValue;
                         else if (scope !== line.r.scope) fields.scope_value = scope === "part" ? (line.r.part_name || null) : null;
-                        var error = win.memory.updateRule(line.r.id, JSON.stringify(fields));
-                        win.editError = error;
-                        if (!error) { win.editing = ""; win.say("Правило сохранено", true); }
+                        // a saved rule reloads the list and destroys this row: keep the window in a local
+                        var w = win;
+                        var error = w.memory.updateRule(line.r.id, JSON.stringify(fields));
+                        w.editError = error;
+                        if (!error) { w.editing = ""; w.say("Правило сохранено", true); }
                     }
                     Rectangle { anchors.fill: parent; color: st.accentSoft; opacity: 0.45 }
                     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: st.borderAccent }
