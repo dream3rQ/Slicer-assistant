@@ -49,6 +49,7 @@ class SlicerChat(QObject):
     busyChanged = pyqtSignal()
     attachmentsChanged = pyqtSignal()
     settingsRequested = pyqtSignal()
+    voiceLevelChanged = pyqtSignal()
     configTested = pyqtSignal(bool, str, arguments=["ok", "text"])
     voiceChanged = pyqtSignal()
     voiceText = pyqtSignal(str, arguments=["text"])
@@ -65,7 +66,8 @@ class SlicerChat(QObject):
         self._voice = ""   # "" | "recording" | "transcribing"
         self._silence = None
         self._listenTimer = QTimer(self)
-        self._listenTimer.setInterval(250)
+        self._listenTimer.setInterval(100)
+        self._level = 0.0
         self._listenTimer.timeout.connect(self._listen)
         self._event.connect(self._onEvent)
         self._done.connect(self._onDone)
@@ -222,8 +224,19 @@ class SlicerChat(QObject):
             value = voice.level()
         except Exception:
             value = None
+        self._setLevel(value or 0.0)
         if self._silence.feed(value, time.time()):
             self.toggleVoice()
+
+    def _setLevel(self, value):
+        if abs(value - self._level) > 0.005:
+            self._level = value
+            self.voiceLevelChanged.emit()
+
+    @pyqtProperty(float, notify=voiceLevelChanged)
+    def voiceLevel(self):
+        """The microphone's input peak while recording, 0..1: the waves around the button."""
+        return self._level
 
     @pyqtSlot()
     def cancelVoice(self):
@@ -236,6 +249,8 @@ class SlicerChat(QObject):
             self._setVoice("")
 
     def _setVoice(self, state):
+        if state != "recording":
+            self._setLevel(0.0)
         self._voice = state
         self.voiceChanged.emit()
 

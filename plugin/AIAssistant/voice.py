@@ -265,7 +265,219 @@ def _short_temp_dir():
     return path
 
 
-recorder = _Recorder()
+class _WaveInRecorder(object):
+    """Records with the waveIn API (winmm via ctypes): 16 kHz mono 16-bit through
+    the wave mapper, which converts from whatever the microphone delivers. Unlike
+    MCI it hands over the samples as they come, so the input level is known for
+    the pause detection and the waves around the microphone button."""
+    RATE = 16000
+    CHUNK = 1600 * 2          # 100 ms of 16-bit mono
+    BUFFERS = 8
+
+    def __init__(self, winmm=None):
+        self._winmm = winmm
+        self._handle = None
+        self._headers = []
+        self._chunks = []
+        self._peak = 0.0
+        self._stop = threading.Event()
+        self._thread = None
+        self._lock = threading.Lock()
+        self._started = None
+
+    def _api(self):
+        if self._winmm is None:
+            import ctypes
+            self._winmm = ctypes.windll.winmm
+        return self._winmm
+
+    def _check(self, err, what):
+        if err:
+            raise VoiceError("Не удалось записать звук: %s вернул код %d. Проверьте, что микрофон подключён "
+                             "и включён в параметрах звука Windows." % (what, err))
+
+    def recording(self):
+        return self._started is not None
+
+    def start(self):
+        import ctypes
+        if self._started is not None:
+            return
+        api = self._api()
+        fmt = _WAVEFORMATEX(1, 1, self.RATE, self.RATE * 2, 2, 16, 0)
+        handle = ctypes.c_void_p()
+        self._check(api.waveInOpen(ctypes.byref(handle), ctypes.c_uint(0xFFFFFFFF), ctypes.byref(fmt), 0, 0, 0),
+                    "waveInOpen")
+        self._handle = handle
+        self._chunks = []
+        self._peak = 0.0
+        self._headers = []
+        try:
+            for _ in range(self.BUFFERS):
+                buf = ctypes.create_string_buffer(self.CHUNK)
+                hdr = _WAVEHDR()
+                hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
+                hdr.dwBufferLength = self.CHUNK
+                self._headers.append((hdr, buf))
+                self._check(api.waveInPrepareHeader(handle, ctypes.byref(hdr), ctypes.sizeof(hdr)), "waveInPrepareHeader")
+                self._check(api.waveInAddBuffer(handle, ctypes.byref(hdr), ctypes.sizeof(hdr)), "waveInAddBuffer")
+            self._check(api.waveInStart(handle), "waveInStart")
+        except VoiceError:
+            self._close()
+            raise
+        self._stop.clear()
+        self._started = time.time()
+        self._thread = threading.Thread(target=self._pump, name="ste-ai-wavein", daemon=True)
+        self._thread.start()
+
+    def _take(self, hdr, buf):
+        """A filled buffer: keep its samples, note the peak, give it back to the driver."""
+        import ctypes
+        data = buf.raw[:hdr.dwBytesRecorded]
+        if data:
+            self._chunks.append(data)
+            self._peak = _peak16(data)
+        hdr.dwBytesRecorded = 0
+        hdr.dwFlags &= ~WHDR_DONE
+        return data
+
+    def _pump(self):
+        import ctypes
+        api = self._api()
+        while not self._stop.is_set():
+            with self._lock:
+                for hdr, buf in self._headers:
+                    if hdr.dwFlags & WHDR_DONE:
+                        self._take(hdr, buf)
+                        api.waveInAddBuffer(self._handle, ctypes.byref(hdr), ctypes.sizeof(hdr))
+            if time.time() - (self._started or time.time()) > MAX_RECORD_SEC:
+                break
+            time.sleep(0.02)
+
+    def _close(self):
+        import ctypes
+        api = self._api()
+        if self._handle is None:
+            return
+        try:
+            api.waveInStop(self._handle)
+            api.waveInReset(self._handle)   # marks the buffers still queued as done
+            for hdr, buf in self._headers:
+                if hdr.dwFlags & WHDR_DONE and hdr.dwBytesRecorded:
+                    self._take(hdr, buf)
+                api.waveInUnprepareHeader(self._handle, ctypes.byref(hdr), ctypes.sizeof(hdr))
+        finally:
+            api.waveInClose(self._handle)
+            self._handle = None
+            self._headers = []
+
+    def _finish(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(2)
+            self._thread = None
+        with self._lock:
+            self._close()
+        self._started = None
+
+    def stop(self):
+        """Ends the recording and returns it as WAV bytes."""
+        if self._started is None:
+            raise VoiceError("Запись не идёт: нажмите микрофон, чтобы начать")
+        self._finish()
+        import io
+        import wave
+        out = io.BytesIO()
+        w = wave.open(out, "wb")
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(self.RATE)
+        w.writeframes(b"".join(self._chunks))
+        w.close()
+        self._chunks = []
+        return out.getvalue()
+
+    def cancel(self):
+        if self._started is not None:
+            self._finish()
+        self._chunks = []
+
+    def level(self):
+        return self._peak if self._started is not None else None
+
+
+WHDR_DONE = 0x1
+
+
+def _peak16(data):
+    """Peak of 16-bit little-endian samples, 0..1."""
+    import array
+    samples = array.array("h")
+    samples.frombytes(data[:len(data) - len(data) % 2])
+    if not samples:
+        return 0.0
+    return min(1.0, max(abs(max(samples)), abs(min(samples))) / 32768.0)
+
+
+def _structs():
+    import ctypes
+
+    class WAVEFORMATEX(ctypes.Structure):
+        _fields_ = [("wFormatTag", ctypes.c_ushort), ("nChannels", ctypes.c_ushort),
+                    ("nSamplesPerSec", ctypes.c_uint32), ("nAvgBytesPerSec", ctypes.c_uint32),
+                    ("nBlockAlign", ctypes.c_ushort), ("wBitsPerSample", ctypes.c_ushort),
+                    ("cbSize", ctypes.c_ushort)]
+
+    class WAVEHDR(ctypes.Structure):
+        pass
+    WAVEHDR._fields_ = [("lpData", ctypes.c_void_p), ("dwBufferLength", ctypes.c_uint32),
+                        ("dwBytesRecorded", ctypes.c_uint32), ("dwUser", ctypes.c_size_t),
+                        ("dwFlags", ctypes.c_uint32), ("dwLoops", ctypes.c_uint32),
+                        ("lpNext", ctypes.c_void_p), ("reserved", ctypes.c_size_t)]
+    return WAVEFORMATEX, WAVEHDR
+
+
+_WAVEFORMATEX, _WAVEHDR = _structs()
+
+
+class _Voice(object):
+    """waveIn first (levels for the pause detection and the waves); MCI when
+    waveIn cannot open the microphone."""
+
+    def __init__(self):
+        self.wavein = _WaveInRecorder()
+        self.mci = _Recorder()
+        self.active = None
+
+    def start(self):
+        if not is_available():
+            raise VoiceError("Запись звука в плагине работает только на Windows")
+        if self.active is not None and self.active.recording():
+            return
+        try:
+            self.wavein.start()
+            self.active = self.wavein
+        except Exception:
+            self.mci.start()
+            self.active = self.mci
+
+    def stop(self):
+        if self.active is None:
+            raise VoiceError("Запись не идёт: нажмите микрофон, чтобы начать")
+        active, self.active = self.active, None
+        return active.stop()
+
+    def cancel(self):
+        active, self.active = self.active, None
+        if active is not None:
+            active.cancel()
+
+    def level(self):
+        """The input peak, 0..1, or None (not recording, or MCI that does not report it)."""
+        return self.active.level() if self.active is not None else None
+
+
+recorder = _Voice()
 start = recorder.start
 stop = recorder.stop
 cancel = recorder.cancel

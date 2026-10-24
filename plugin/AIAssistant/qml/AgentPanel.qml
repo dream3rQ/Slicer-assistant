@@ -539,15 +539,35 @@ Rectangle {
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 10
                     spacing: 4
-                    RoundButton {
+                    Item {  // microphone with waves that follow the voice while recording
                         visible: manager.voiceAvailable
-                        // recording: a red microphone stops it; the square is only for stopping the agent
-                        icon: manager.voiceState === "recording" ? "mic_white" : "mic"
-                        spinning: manager.voiceState === "transcribing"
-                        fill: manager.voiceState === "recording" ? st.danger : st.micBg
-                        fg: manager.voiceState === "recording" ? "white" : st.textInk
-                        tip: manager.voiceState === "recording" ? "Остановить запись (сама остановится после паузы в 4 секунды)" : "Голос: нажмите и говорите. Запись остановится после паузы в 4 секунды, текст появится в поле (Esc — отмена)"
-                        onClicked: manager.toggleVoice()
+                        width: 33; height: 33
+                        readonly property real loud: manager.voiceState === "recording" ? Math.max(0, Math.min(1, (manager.voiceLevel - 0.02) * 4)) : 0
+                        Repeater {
+                            model: 2
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 33 + (index + 1) * 10 * parent.loud
+                                height: width
+                                radius: width / 2
+                                color: "transparent"
+                                border.width: 2
+                                border.color: st.danger
+                                opacity: parent.loud > 0.03 ? 0.45 - index * 0.2 : 0
+                                Behavior on width { NumberAnimation { duration: 120 } }
+                                Behavior on opacity { NumberAnimation { duration: 120 } }
+                            }
+                        }
+                        RoundButton {
+                            anchors.centerIn: parent
+                            // recording: a red microphone stops it; the square is only for stopping the agent
+                            icon: manager.voiceState === "recording" ? "mic_white" : "mic"
+                            spinning: manager.voiceState === "transcribing"
+                            fill: manager.voiceState === "recording" ? st.danger : st.micBg
+                            fg: manager.voiceState === "recording" ? "white" : st.textInk
+                            tip: manager.voiceState === "recording" ? "Остановить запись (сама остановится после паузы в 4 секунды)" : "Голос: нажмите и говорите. Запись остановится после паузы в 4 секунды, текст появится в поле (Esc — отмена)"
+                            onClicked: manager.toggleVoice()
+                        }
                     }
                     RoundButton {
                         visible: !manager.busy || base.openProposal !== ""
