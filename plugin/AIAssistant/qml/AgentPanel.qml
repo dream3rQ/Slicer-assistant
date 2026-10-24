@@ -154,7 +154,11 @@ Rectangle {
         onEventAdded: base.onEvent(JSON.parse(json))
         onCleared: { messages.clear(); callRows = {}; proposalRows = {}; openProposal = ""; thinking = ""; progress = -1 }
         onConfigTested: { settings.status = text; settings.statusOk = ok }
-        onVoiceText: { input.text = (input.text.trim() ? input.text.trim() + " " : "") + text; input.forceActiveFocus() }
+        onVoiceText: {
+            input.text = (input.text.trim() ? input.text.trim() + " " : "") + text;
+            input.forceActiveFocus();
+            if (text && !manager.busy && JSON.parse(manager.configJson()).voice_autosend) base.send();
+        }
         onSettingsRequested: settings.open()
     }
 
@@ -629,14 +633,16 @@ Rectangle {
             temp.text = String(cfg.temperature); steps.text = String(cfg.max_steps); results.text = cfg.results_dir || "";
             ssl.checked = !!cfg.ssl_verify; compact.checked = cfg.compact_history !== false;
             confirm.checked = cfg.confirm_plan !== false; popups.checked = cfg.slicer_popups !== false;
+            autosend.checked = !!cfg.voice_autosend;
             status = ""; show(); raise();
         }
         function save() {
             manager.saveConfig(JSON.stringify({
                 llm_url: url.text.trim(), llm_key: key.text.trim(), llm_model: model.text.trim(),
-                temperature: parseFloat(temp.text || "0.2"), max_steps: parseInt(steps.text || "30", 10),
+                // "0,5" with a Russian comma: parseFloat stopped at the comma and saved 0
+                temperature: parseFloat((temp.text || "0.2").replace(",", ".")) || 0, max_steps: parseInt(steps.text || "30", 10),
                 results_dir: results.text.trim(), ssl_verify: ssl.checked, compact_history: compact.checked,
-                confirm_plan: confirm.checked, slicer_popups: popups.checked
+                confirm_plan: confirm.checked, slicer_popups: popups.checked, voice_autosend: autosend.checked
             }));
             status = "Сохранено"; statusOk = true;
         }
@@ -664,6 +670,7 @@ Rectangle {
             CheckBox { id: compact; text: "Экономить токены (сокращать старую историю)" }
             CheckBox { id: confirm; text: "Показывать изменения перед применением" }
             CheckBox { id: popups; text: "Карточка изменений и уведомления в окне слайсера" }
+            CheckBox { id: autosend; text: "Отправлять продиктованное сразу, без кнопки" }
             Label { text: settings.status; color: settings.statusOk ? "#1E7A4C" : st.danger; wrapMode: Text.Wrap; Layout.fillWidth: true }
             RowLayout {
                 Button { text: "Проверить подключение"; onClicked: { settings.save(); settings.status = "Проверяю…"; manager.testConnection() } }

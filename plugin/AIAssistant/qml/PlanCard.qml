@@ -41,8 +41,15 @@ Item {
 
     function num(v) {
         if (typeof v !== "number") return v;
-        var s = Math.round(v) === v ? String(v) : v.toFixed(2);
+        // up to 4 decimals without trailing zeros: 0.125 stays 0,125 (toFixed(2) made it 0,13,
+        // and the rounded field then went out as the user's edit)
+        var s = Math.round(v) === v ? String(v) : String(parseFloat(v.toFixed(4)));
         return s.replace(".", ",");
+    }
+    // the user's value against the proposed one: numbers by value, the rest as text
+    function same(a, b) {
+        if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 1e-9;
+        return String(a) === String(b);
     }
     function fmt(item, v) {
         if (v === null || v === undefined || v === "") return "—";
@@ -83,7 +90,9 @@ Item {
         var out = [{ value: "part", label: item.id === "mode" ? "для этой детали (прецедент)" : "для этой детали" }];
         if (!expert || item.id === "mode") return out;
         var m = materialName();
-        out.push({ value: "material", label: m ? "для материала " + m : "для этого материала" });
+        // a material is never remembered "for this material" (memory refuses it)
+        if (item.id !== "material_id")
+            out.push({ value: "material", label: m ? "для материала " + m : "для этого материала" });
         out.push({ value: "global", label: "всегда" });
         return out;
     }
@@ -93,7 +102,7 @@ Item {
         for (var i = 0; i < rows.count; i++) {
             var row = rows.itemAt(i);
             var v = row.edited();
-            if (v !== undefined && String(v) !== String(row.item.proposed)) overrides[row.item.id] = v;
+            if (v !== undefined && !same(v, row.item.proposed)) overrides[row.item.id] = v;
             if (row.remember && row.memoryError === "" && overrides[row.item.id] !== undefined) {
                 var scope = row.scopes[row.scopeIndex].value;
                 (byScope[scope] = byScope[scope] || []).push(row.item.id);
@@ -303,7 +312,7 @@ Item {
                                         font.family: st.family; font.pixelSize: 12; font.weight: Font.Medium
                                         selectByMouse: true
                                         clip: true
-                                        onTextChanged: row.userChanged = String(row.edited()) !== String(row.item.proposed)
+                                        onTextChanged: row.userChanged = !base.same(row.edited(), row.item.proposed)
                                         Keys.onUpPressed: row.step(1)
                                         Keys.onDownPressed: row.step(-1)
                                     }

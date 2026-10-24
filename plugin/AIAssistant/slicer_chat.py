@@ -329,14 +329,18 @@ class SlicerChat(QObject):
 
     @pyqtSlot(result=str)
     def configJson(self):
-        return json.dumps(config.public(), ensure_ascii=False)
+        return json.dumps(dict(config.public(), voice_autosend=voice.get("voice_autosend")), ensure_ascii=False)
 
     @pyqtSlot(str, result=str)
     def saveConfig(self, payload):
-        values = {k: v for k, v in json.loads(payload).items() if k in config.DEFAULTS}
+        payload = json.loads(payload)
+        values = {k: v for k, v in payload.items() if k in config.DEFAULTS}
         if "llm_key" in values and not values["llm_key"]:
             values.pop("llm_key")  # empty field = keep the stored key
+        if values.get("llm_url", config.get("llm_url")) != config.get("llm_url") or "llm_key" in values:
+            voice.forget_model()  # another gateway may name the speech model differently
         config.set_many(values)
+        voice.set_many({k: v for k, v in payload.items() if k in voice.DEFAULTS})
         return self.configJson()
 
     @pyqtSlot()

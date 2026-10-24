@@ -118,7 +118,8 @@ class Memory:
     # ---------------------------------------------------------------- storage
 
     def _empty(self):
-        return {"version": VERSION, "role": "novice", "events": [], "rules": [], "cases": []}
+        # old_cases: precedents a newer choice or an import replaced, kept so a rollback can bring them back
+        return {"version": VERSION, "role": "novice", "events": [], "rules": [], "cases": [], "old_cases": []}
 
     def _load(self):
         if self.data is not None:
@@ -222,7 +223,7 @@ class Memory:
                                     reasons.get(key) or reasons.get(item_id))
                 out["events"].append(event["id"])
                 if key == "mode":
-                    case = self._add_case(context, change.get("chosen"))
+                    case = self._add_case(context, change.get("chosen"), ts=event["ts"])
                     if case:
                         out["cases"].append(case["id"])
                     if key in remember_keys:
@@ -279,6 +280,8 @@ class Memory:
             rule = {"id": _new_id("r_"), "key": key, "value": value, "scope": scope, "scope_value": scope_value,
                     "status": "active", "created_ts": now, "updated_ts": now, "role": role,
                     "source_event_ids": source, "note": reason or None}
+            if scope == "part" and _part_of(context)["name"]:
+                rule["part_name"] = _part_of(context)["name"]
             self._load()["rules"].append(rule)
             self._rule_event("rule_add", rule, context)
         return {"ok": True, "status": rule["status"], "rule_id": rule["id"], "reason": reason or None}
@@ -317,7 +320,8 @@ class Memory:
                 return rule
         return None
 
-    def _add_case(self, context, mode):
+    def _add_case(self, context, mode, ts=None):
+        """ts: the edit's journal time, so a rollback to that journal row keeps this precedent."""
         if mode not in PRINT_MODES:
             return None
         part = _part_of(context)
@@ -326,13 +330,20 @@ class Memory:
         features = dict(part["features"])
         if part["class"]:
             features.setdefault("class", part["class"])
-        case = {"id": _new_id("c_"), "ts": _now(), "mesh_hash": part["mesh_hash"], "features": features,
-                "mode": mode, "material": context.get("material"), "name": part["name"]}
-        cases = self._load()["cases"]
-        # One precedent per mesh: the latest choice wins.
-        cases[:] = [c for c in cases if not (part["mesh_hash"] and c.get("mesh_hash") == part["mesh_hash"])]
-        cases.append(case)
+        case = {"id": _new_id("c_"), "ts": ts or _now(), "mesh_hash": part["mesh_hash"], "features": features,
+                "mode": mode, "material": context.get("material"), "name": part["name"], "role": self.role()}
+        data = self._load()
+        # One precedent per mesh: the latest choice wins, the replaced one is kept for rollback.
+        same = [c for c in data["cases"] if part["mesh_hash"] and c.get("mesh_hash") == part["mesh_hash"]]
+        self._retire_cases(same, case["ts"])
+        data["cases"].append(case)
         return case
+
+    def _retire_cases(self, cases, ts):
+        data = self._load()
+        for case in cases:
+            data["cases"].remove(case)
+            data["old_cases"].append(dict(case, superseded_ts=ts))
 
     # ---------------------------------------------------------------- validation
 
@@ -591,11 +602,23 @@ class Memory:
             to_ts = float(to_ts)
             rules = self.rules_at(to_ts)
             data = self._load()
+            before = len(data["rules"])
             removed_cases = [c for c in data["cases"] if c["ts"] > to_ts]
+            now = _now()
+            self._retire_cases(removed_cases, now)
+            # Precedents that were current at to_ts and were replaced later come back.
+            current = {c.get("mesh_hash") for c in data["cases"]}
+            restored = []
+            for old in sorted(data["old_cases"], key=lambda c: c["ts"], reverse=True):
+                if old["ts"] <= to_ts < old["superseded_ts"] and old.get("mesh_hash") not in current:
+                    case = {k: v for k, v in old.items() if k != "superseded_ts"}
+                    data["cases"].append(case)
+                    current.add(case.get("mesh_hash"))
+                    restored.append(case["id"])
             data["rules"] = rules
-            data["cases"] = [c for c in data["cases"] if c["ts"] <= to_ts]
-            self._event({}, "rollback", to_ts=to_ts, rules=copy.deepcopy(rules),
-                        removed_cases=[c["id"] for c in removed_cases])
+            # proposed / chosen: how many rules there were and are, for the journal line
+            self._event({}, "rollback", proposed=before, chosen=len(rules), to_ts=to_ts, rules=copy.deepcopy(rules),
+                        removed_cases=[c["id"] for c in removed_cases], restored_cases=restored)
             self._save()
             return {"rules": len(rules), "removed_cases": len(removed_cases)}
 
@@ -605,6 +628,7 @@ class Memory:
         with self.lock:
             data = copy.deepcopy(self._load())
             data.pop("role", None)   # the role belongs to this PC, not to the rules
+            data.pop("old_cases", None)
             data["exported_ts"] = _now()
             return data
 
@@ -625,6 +649,7 @@ class Memory:
                 for rule in list(mem["rules"]):
                     mem["rules"].remove(rule)
                     self._rule_event("rule_delete", rule, reason="импорт с заменой")
+                self._retire_cases(list(mem["cases"]), _now())
             for raw in data.get("rules") or []:
                 try:
                     key, scope = raw["key"], raw["scope"]

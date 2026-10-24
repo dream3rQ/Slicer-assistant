@@ -70,7 +70,7 @@ def _axis_center(normals, centers, areas, axis, size):
     center = None
     for scale in (0.3, 0.1, 0.03, 0.01, 0.005):
         w = numpy.sqrt(weights)
-        center = numpy.linalg.lstsq(a * w[:, None], b * w, rcond=None)[0]
+        center = numpy.linalg.lstsq(a * w[:, None], b * w, rcond=-1)[0]  # rcond=None needs numpy >= 1.14; the slicer may ship older
         weights = base / (1.0 + (numpy.abs(a.dot(center) - b) / (scale * size)) ** 2)
     return center
 

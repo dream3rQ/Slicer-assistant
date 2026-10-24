@@ -594,6 +594,8 @@ def transcribe(audio, mime="audio/wav"):
         raise VoiceError("Ошибка SSL при распознавании речи: %s" % e)
     except urllib.error.URLError as e:
         raise VoiceError("Не удалось подключиться к шлюзу для распознавания речи: %s" % e.reason)
+    except OSError as e:  # read timeout or a dropped connection
+        raise VoiceError("Шлюз не ответил при распознавании речи: %s" % (e or e.__class__.__name__))
     try:
         text = json.loads(raw).get("text", "")
     except (ValueError, AttributeError):

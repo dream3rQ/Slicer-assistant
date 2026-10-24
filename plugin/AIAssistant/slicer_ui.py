@@ -133,9 +133,12 @@ class SlicerUI(QObject):
     # ---- events
     def _onEvent(self, session, event):
         server = self._extension.server()
-        if server is None or session is not server.session:
-            return
         kind, data = event["type"], event.get("data") or {}
+        # "Новый диалог" replaces the session while its card may be open: the old
+        # session's proposal_closed still has to close the card.
+        stale_close = kind == "proposal_closed" and session is self._session
+        if server is None or (session is not server.session and not stale_close):
+            return
         if kind == "proposal":
             self._session, self._proposal = session, data
             self.proposalChanged.emit()

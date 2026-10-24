@@ -35,9 +35,15 @@ class _Backend:
         return memory.get().list_events(filter, self._sort(sort, "ts"))
 
     def validate(self, key, value, context=None):
+        """The same answers "Применить" will give (Memory._remember, Session.check_remember)."""
         mem = memory.get()
         context = dict(context or {})
         scope = context.pop("scope", "part")
+        key = memory.rule_key(key)
+        if key == "mode":
+            return True, "Режим запомнится как пример для этой детали и похожих"
+        if key == "material_id" and scope == "material":
+            return False, "Материал нельзя запомнить «для этого материала»"
         if scope != "part" and mem.role() != "expert":
             return False, "Новичок может запомнить значение только для этой детали"
         return mem.validate(key, value, context)
@@ -188,7 +194,7 @@ def event_row(event):
     if action == "rollback":
         change = "правил было %s, стало %s" % (event.get("proposed"), event.get("chosen"))
     elif action == "rule_delete":
-        change = value_text(key, event.get("proposed")) + " → удалено"
+        change = value_text(key, event.get("chosen") if event.get("proposed") is None else event.get("proposed")) + " → удалено"
     elif action in ("rule_add", "rule_edit", "rule_off") and event.get("proposed") is None:
         change = value_text(key, event.get("chosen"))
     else:
@@ -258,6 +264,14 @@ class MemoryBridge(QObject):
         for rule in backend.list_rules({}, {}):
             if rule.get("id") == rule_id:
                 return json.dumps(rule_row(rule), ensure_ascii=False)
+        # a mode precedent (applied_rules[].rule_id is the case id): shown like a rule
+        for case in backend.list_cases():
+            if case.get("id") == rule_id:
+                return json.dumps(rule_row({"id": case["id"], "key": "mode", "value": case.get("mode"),
+                                            "scope": "part", "scope_value": case.get("mesh_hash"),
+                                            "part_name": case.get("name"), "status": "active",
+                                            "role": case.get("role"), "created_ts": case.get("ts"),
+                                            "note": "пример для этой детали и похожих"}), ensure_ascii=False)
         return "null"
 
     @pyqtSlot(result=str)

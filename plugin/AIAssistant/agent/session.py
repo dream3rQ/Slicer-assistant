@@ -106,16 +106,21 @@ class Session:
     def post_user_message(self, text, attachment_ids, hint=None):
         """hint: extra words for the LLM only, e.g. the 3D/5D chip from the slicer panel."""
         with self.lock:
-            if self.proposal is not None and text:
-                # Typing while the plan card is open = "Уточнить" with that text.
-                self.emit("user", {"text": text, "attachments": []})
-                self._answer(self.proposal, {"action": "revise", "text": text})
+            attachments = [self.uploads[a] for a in attachment_ids or [] if a in self.uploads]
+            if self.proposal is not None and (text or attachments):
+                # Typing while the plan card is open = "Уточнить" with that text. Files go along as
+                # text (the card's answer is a tool result): a document's text, a model's file_id.
+                self.emit("user", {"text": text, "attachments": [
+                    {"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in attachments]})
+                feedback = _user_content(text, attachments)
+                if isinstance(feedback, list):
+                    feedback = feedback[0]["text"]
+                self._answer(self.proposal, {"action": "revise", "text": feedback})
                 return
             if self.busy:
                 raise RuntimeError("Ассистент ещё отвечает на предыдущее сообщение")
             self.busy = True
             self.cancel_requested = False
-        attachments = [self.uploads[a] for a in attachment_ids or [] if a in self.uploads]
         self.emit("user", {"text": text, "hint": hint, "attachments": [
             {"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in attachments]})
         self.messages.append({"role": "user", "content": _user_content(text + ("\n" + hint if hint else ""), attachments)})
