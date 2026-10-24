@@ -179,6 +179,23 @@ Rectangle {
             Icon { anchors.centerIn: parent; name: "collapse_chevron"; width: 5; height: 9 }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.hide() }
         }
+        Item {  // "Память агента": the rules and the journal of edits (MemoryWindow.qml)
+            id: memoryButton
+            visible: !!manager.memory
+            x: header.working ? 38 : parent.width - 13 - 30 - width - 4
+            width: memoryIcon.width + 6 + memoryLabel.implicitWidth + 12; height: parent.height
+            Rectangle { anchors.centerIn: parent; width: parent.width; height: 26; radius: 13; color: memoryArea.containsMouse ? st.groupBg : "transparent" }
+            Icon { id: memoryIcon; x: 6; anchors.verticalCenter: parent.verticalCenter; name: "memory"; width: 16; height: 16 }
+            Text {
+                id: memoryLabel
+                x: memoryIcon.x + memoryIcon.width + 5
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Память"
+                color: st.textSecondary
+                font.family: st.family; font.pixelSize: 12
+            }
+            MouseArea { id: memoryArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: memoryWindow.open() }
+        }
         Item {
             visible: !header.working
             anchors.right: parent.right; anchors.rightMargin: 13
@@ -584,6 +601,13 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // ---- the agent's memory: rules and the journal of edits
+    MemoryWindow { id: memoryWindow; memory: manager.memory }
+    Connections {
+        target: manager.memory
+        onWindowRequested: memoryWindow.open()
     }
 
     // ---- settings window

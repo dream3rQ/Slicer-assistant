@@ -198,14 +198,21 @@ class Memory:
 
     def record_edits(self, context, changed, remember=None, reasons=None):
         """changed: {item id: {"proposed", "chosen"}} as session._edited_plan returns it.
-        remember: {"keys": [item ids or rule keys], "scope": one of SCOPES}.
+        remember: {"keys": [item ids or rule keys], "scope": one of SCOPES, "values"?}, or a
+        list of them, one per scope, as the card sends it.
         Returns {"events": [ids], "rules": {key: {"ok", "reason", "rule_id", "status"}},
         "cases": [ids]}."""
         context = context or {}
         reasons = reasons or {}
-        remember = remember or {}
-        remember_keys = {rule_key(k) for k in remember.get("keys") or []}
-        scope = remember.get("scope") or "part"
+        entries = remember if isinstance(remember, list) else [remember or {}]
+        scopes = {}  # rule key -> scope it is remembered for
+        values = {}
+        for entry in entries:
+            for k in entry.get("keys") or []:
+                scopes[rule_key(k)] = entry.get("scope") or "part"
+            values.update(entry.get("values") or {})
+        remember = {"values": values}
+        remember_keys = set(scopes)
         out = {"events": [], "rules": {}, "cases": []}
         with self.lock:
             self._load()
@@ -224,7 +231,7 @@ class Memory:
                                                        "этой детали и похожих, а не как правило"}
                     continue
                 if key in remember_keys:
-                    out["rules"][key] = self._remember(context, key, change.get("chosen"), scope, event)
+                    out["rules"][key] = self._remember(context, key, change.get("chosen"), scopes[key], event)
                 else:
                     candidate = self._maybe_candidate(context, key, change.get("chosen"), event)
                     if candidate:
@@ -240,7 +247,7 @@ class Memory:
                     case = self._add_case(context, value)
                     out["rules"][key] = {"ok": True, "status": "case", "rule_id": case and case["id"]}
                     continue
-                out["rules"][key] = self._remember(context, key, value, scope, None)
+                out["rules"][key] = self._remember(context, key, value, scopes[key], None)
             self._save()
         return out
 

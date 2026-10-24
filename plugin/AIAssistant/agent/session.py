@@ -144,7 +144,8 @@ class Session:
         self.cancel_requested = True
 
     def answer_proposal(self, proposal_id, action, overrides=None, skip=None, text=None, remember=None):
-        """remember: {"keys": [item ids], "scope": "part|material|mode|global"} from "Запомнить"."""
+        """remember: [{"keys": [item ids], "scope": "part|material|mode|global"}] from "Запомнить",
+        one entry per scope; a single dict is taken too."""
         if action not in PROPOSAL_ACTIONS:
             raise ValueError("action: одно из %s" % ", ".join(PROPOSAL_ACTIONS))
         with self.lock:
@@ -153,8 +154,11 @@ class Session:
                 raise RuntimeError("Предложение уже закрыто")
             answer = {"action": action, "overrides": dict(overrides or {}),
                       "skip": list(skip or []), "text": (text or "").strip()}
-            if remember and remember.get("keys"):
-                answer["remember"] = {"keys": list(remember["keys"]), "scope": remember.get("scope") or "part"}
+            entries = remember if isinstance(remember, list) else [remember] if remember else []
+            entries = [{"keys": list(e["keys"]), "scope": e.get("scope") or "part"}
+                       for e in entries if isinstance(e, dict) and e.get("keys")]
+            if entries:
+                answer["remember"] = entries
             self._answer(proposal, answer)
 
     def check_remember(self, proposal_id, item_id, value, scope="part"):
@@ -372,7 +376,7 @@ class Session:
             for item in items:
                 key = memory.rule_key(item["id"])
                 values[key] = (answer.get("overrides") or {}).get(item["id"], item["proposed"])
-            remember = dict(remember, values=values)
+            remember = [dict(entry, values=values) for entry in remember]
         try:
             saved = mem.record_edits(context, changed, remember, reasons=args.get("reasons"))
         except Exception as e:

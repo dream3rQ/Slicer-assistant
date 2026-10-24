@@ -14,6 +14,7 @@ from PyQt5.QtCore import QEvent, QObject, QPointF, QTimer, QUrl, pyqtProperty, p
 
 from . import voice
 from .agent import config, llm, session as session_module
+from .memory_ui import saved_text
 from .slicer_ui import mount
 
 # The 3D / 5D chips under the input: an explicit choice the agent must follow (see prompt.py).
@@ -54,10 +55,11 @@ class SlicerChat(QObject):
     voiceChanged = pyqtSignal()
     voiceText = pyqtSignal(str, arguments=["text"])
 
-    def __init__(self, extension, card, parent=None):
+    def __init__(self, extension, card, memory, parent=None):
         super().__init__(parent)
         self._extension = extension
         self._card = card
+        self._memory = memory
         self._panel = None
         self._button = None
         self._session = None
@@ -148,6 +150,11 @@ class SlicerChat(QObject):
             self.show()
 
     # ---- state for QML
+    @pyqtProperty(QObject, constant=True)
+    def memory(self):
+        """memory_ui.MemoryBridge: the "Память агента" window in the panel."""
+        return self._memory
+
     @pyqtProperty(bool, notify=busyChanged)
     def busy(self):
         return self._busy
@@ -388,6 +395,13 @@ class SlicerChat(QObject):
             data.pop("result", None)
         elif kind == "tool_call":
             data["args"] = json.dumps(data.get("arguments"), ensure_ascii=False)[:160]
+        elif kind == "memory_saved":
+            # Rules from "Запомнить": a line in the chat, and the memory window reloads.
+            self._memory.changed.emit()
+            text = saved_text(data)
+            if not text:
+                return
+            kind, data = "note", {"text": text, "html": markdown_html(text)}
         elif kind == "usage":
             data["line"] = usage_line(data) + " · шагов %d" % len(data.pop("steps", None) or [])
         self.eventAdded.emit(json.dumps({"seq": event.get("seq"), "type": kind, "data": data}, ensure_ascii=False))
