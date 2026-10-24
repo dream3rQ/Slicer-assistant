@@ -8,8 +8,9 @@ import json
 import os
 import re
 import threading
+import time
 
-from PyQt5.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QEvent, QObject, QPointF, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 
 from . import voice
 from .agent import config, llm, session as session_module
@@ -17,8 +18,27 @@ from .slicer_ui import mount
 
 # The 3D / 5D chips under the input: an explicit choice the agent must follow (see prompt.py).
 # The hint goes to the LLM only; the chat shows the chip.
+SILENCE_PAUSE_SEC = 2.5   # dictation ends by itself after this long without speech
+
 MODE_HINTS = {"3D": "Режим печати: 3D (classic), выбран пользователем.",
               "5D": "Режим печати: 5D, выбран пользователем; Spiral или полный 5D выбери по детали."}
+
+
+def saved_line(result):
+    """The "file saved" line under a tool call that wrote files (mock-up frame 6):
+    {"saved": text, "saved_dir": folder to open on click}, or {} for other tools."""
+    if not isinstance(result, dict):
+        return {}
+    folder = result.get("folder")
+    if folder:
+        names = [n for n, key in (("project.3mf", "project_3mf_bytes"), ("result.gcode", "gcode_bytes")) if result.get(key)]
+        what = " и ".join(names) or "Результаты"
+        return {"saved": "%s %s в %s" % (what, "сохранены" if len(names) != 1 else "сохранён", folder), "saved_dir": folder}
+    path = result.get("path")
+    if isinstance(path, str) and os.path.splitext(path)[1].lower() in (".3mf", ".gcode"):
+        return {"saved": "%s сохранён в %s" % (os.path.basename(path), os.path.dirname(path)),
+                "saved_dir": os.path.dirname(path)}
+    return {}
 
 
 class SlicerChat(QObject):
@@ -28,20 +48,28 @@ class SlicerChat(QObject):
     cleared = pyqtSignal()
     busyChanged = pyqtSignal()
     attachmentsChanged = pyqtSignal()
+    settingsRequested = pyqtSignal()
+    voiceLevelChanged = pyqtSignal()
     configTested = pyqtSignal(bool, str, arguments=["ok", "text"])
     voiceChanged = pyqtSignal()
     voiceText = pyqtSignal(str, arguments=["text"])
 
-    def __init__(self, extension, card, parent=None):
+    def __init__(self, extension, card, memory, parent=None):
         super().__init__(parent)
         self._extension = extension
         self._card = card
+        self._memory = memory
         self._panel = None
         self._button = None
         self._session = None
         self._busy = False
         self._attachments = []
         self._voice = ""   # "" | "recording" | "transcribing"
+        self._silence = None
+        self._listenTimer = QTimer(self)
+        self._listenTimer.setInterval(100)
+        self._level = 0.0
+        self._listenTimer.timeout.connect(self._listen)
         self._event.connect(self._onEvent)
         self._done.connect(self._onDone)
         session_module.LISTENERS.append(self._event.emit)
@@ -50,7 +78,7 @@ class SlicerChat(QObject):
         """Called once the slicer's main window exists: the top bar button, and
         the panel itself if it was open when the slicer was closed."""
         if self._button is None:
-            self._button = mount("AgentButton", {"manager": self}, in_topbar=True)
+            self._button = mount("AgentButton", {"manager": self})
         if config.get("panel_open"):
             self.show()
 
@@ -62,10 +90,43 @@ class SlicerChat(QObject):
                 return False
             if self._button is not None:
                 self._button.setProperty("panel", self._panel)
+            window = self._panel.window()
+            if window is not None:
+                window.installEventFilter(self)
         if self._session is not server.session:
             self._replay(server.session)
         self._panel.setProperty("visible", True)
         config.set_many({"panel_open": True})
+        return True
+
+    def eventFilter(self, obj, event):
+        """Files dragged onto the panel are the assistant's. The slicer's window has
+        a drop area of its own that opens files on the build plate; filtering the
+        window's drag events here catches them before any QML item sees them."""
+        kind = event.type()
+        panel = self._panel
+        if kind in (QEvent.MouseMove, QEvent.MouseButtonRelease, QEvent.Leave, QEvent.FocusIn):
+            # an ordinary mouse event means no drag is going on any more
+            if panel is not None and panel.property("fileDrag"):
+                panel.setProperty("fileDrag", False)
+            return False
+        if kind not in (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop):
+            return False
+        over = False
+        if panel is not None and panel.property("visible") and kind != QEvent.DragLeave and event.mimeData().hasUrls():
+            top_left = panel.mapToScene(QPointF(0, 0))
+            pos = event.pos()
+            over = (top_left.x() <= pos.x() < top_left.x() + panel.width()
+                    and top_left.y() <= pos.y() < top_left.y() + panel.height())
+        dragging = over and kind != QEvent.Drop   # the zone goes away as soon as the files are dropped
+        if panel is not None and bool(panel.property("fileDrag")) != dragging:
+            panel.setProperty("fileDrag", dragging)
+        if not over:
+            return False
+        if kind == QEvent.Drop:
+            self.addFiles([url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()])
+        event.setDropAction(1)  # Qt.CopyAction
+        event.accept()
         return True
 
     def isVisible(self):
@@ -88,6 +149,11 @@ class SlicerChat(QObject):
             self.show()
 
     # ---- state for QML
+    @pyqtProperty(QObject, constant=True)
+    def memory(self):
+        """memory_ui.MemoryBridge: the "Память агента" window in the panel."""
+        return self._memory
+
     @pyqtProperty(bool, notify=busyChanged)
     def busy(self):
         return self._busy
@@ -95,6 +161,28 @@ class SlicerChat(QObject):
     @pyqtProperty(str, notify=attachmentsChanged)
     def attachmentsJson(self):
         return json.dumps(self._attachments, ensure_ascii=False)
+
+    @pyqtSlot()
+    def retry(self):
+        server = self._extension.ensureServer()
+        try:
+            server.session.retry()
+        except Exception as e:
+            self._local("error", str(e))
+
+    @pyqtSlot()
+    def openSettings(self):
+        """Extensions → AI Assistant → Settings: the settings window lives in the panel's QML."""
+        if self.show():
+            self.settingsRequested.emit()
+
+    @pyqtProperty(int, constant=True)
+    def panelWidth(self):
+        return config.get("panel_width")
+
+    @pyqtSlot(int)
+    def savePanelWidth(self, width):
+        config.set_many({"panel_width": int(width)})
 
     @pyqtProperty(bool, constant=True)
     def voiceAvailable(self):
@@ -115,7 +203,10 @@ class SlicerChat(QObject):
             if self._voice == "":
                 voice.start()
                 self._setVoice("recording")
+                self._silence = voice.SilenceDetector(SILENCE_PAUSE_SEC)
+                self._listenTimer.start()
                 return
+            self._listenTimer.stop()
             audio = voice.stop()
         except Exception as e:
             self._setVoice("")
@@ -130,8 +221,32 @@ class SlicerChat(QObject):
                 self._done.emit("voice", json.dumps({"error": str(e)}))
         threading.Thread(target=work, daemon=True).start()
 
+    def _listen(self):
+        """While recording: stop by itself after a pause in speech."""
+        if self._voice != "recording":
+            self._listenTimer.stop()
+            return
+        try:
+            value = voice.level()
+        except Exception:
+            value = None
+        self._setLevel(value or 0.0)
+        if self._silence.feed(value, time.time()):
+            self.toggleVoice()
+
+    def _setLevel(self, value):
+        if abs(value - self._level) > 0.005:
+            self._level = value
+            self.voiceLevelChanged.emit()
+
+    @pyqtProperty(float, notify=voiceLevelChanged)
+    def voiceLevel(self):
+        """The microphone's input peak while recording, 0..1: the waves around the button."""
+        return self._level
+
     @pyqtSlot()
     def cancelVoice(self):
+        self._listenTimer.stop()
         if self._voice == "recording":
             try:
                 voice.cancel()
@@ -140,6 +255,8 @@ class SlicerChat(QObject):
             self._setVoice("")
 
     def _setVoice(self, state):
+        if state != "recording":
+            self._setLevel(0.0)
         self._voice = state
         self.voiceChanged.emit()
 
@@ -163,6 +280,8 @@ class SlicerChat(QObject):
         session = self._extension.ensureServer().session
         for url in urls:
             path = url.toLocalFile() if isinstance(url, QUrl) else (QUrl(url).toLocalFile() if "://" in url else url)
+            if any(a["name"] == os.path.basename(path) for a in self._attachments):
+                continue  # already attached
             try:
                 with open(path, "rb") as f:
                     data = base64.b64encode(f.read()).decode("ascii")
@@ -170,6 +289,19 @@ class SlicerChat(QObject):
             except Exception as e:
                 self._local("error", "Не удалось приложить %s: %s" % (os.path.basename(path), e))
         self.attachmentsChanged.emit()
+
+    @pyqtSlot()
+    def pickFiles(self):
+        """The "+" button. A Qt widgets dialog from Python, not QtQuick.Dialogs:
+        with a FileDialog in our QML the slicer also opened the picked files
+        itself (Convert Image for photos, "Invalid File" for docx)."""
+        from PyQt5.QtWidgets import QFileDialog
+        paths, _ = QFileDialog.getOpenFileNames(
+            None, "Приложить файлы для ассистента", config.get("attach_dir") or os.path.expanduser("~"),
+            "Модели, фото и ТЗ (*.stl *.obj *.3mf *.png *.jpg *.jpeg *.webp *.docx *.txt *.md);;Все файлы (*)")
+        if paths:
+            config.set_many({"attach_dir": os.path.dirname(paths[0])})
+            self.addFiles(paths)
 
     @pyqtSlot(str)
     def removeAttachment(self, file_id):
@@ -252,10 +384,12 @@ class SlicerChat(QObject):
     def _forward(self, event):
         data = dict(event.get("data") or {})
         kind = event["type"]
-        if kind in ("assistant",):
+        if kind in ("assistant", "note"):
             data["html"] = markdown_html(data.get("text"))
         elif kind == "tool_result":
             data["summary"] = summarize(data.get("name"), data.get("result"))
+            if data.get("ok"):
+                data.update(saved_line(data.get("result")))
             data["details"] = json.dumps(data.get("result"), ensure_ascii=False, indent=1)[:4000]
             data.pop("result", None)
         elif kind == "tool_call":

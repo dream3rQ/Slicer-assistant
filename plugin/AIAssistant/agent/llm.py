@@ -17,7 +17,7 @@ class LLMError(Exception):
 def _endpoint(path):
     base = (config.get("llm_url") or "").strip().rstrip("/")
     if not base:
-        raise LLMError("Не задан URL LLM. Откройте настройки чата (шестерёнка) и укажите адрес.")
+        raise LLMError("Не задан URL LLM. Откройте настройки ассистента и укажите адрес.")
     for suffix in ("/chat/completions", "/models"):
         if base.endswith(suffix):
             base = base[: -len(suffix)]

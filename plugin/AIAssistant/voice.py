@@ -34,7 +34,7 @@ MAX_RECORD_SEC = 300              # a forgotten recording is dropped after this
 # Vocabulary hint for the speech model, so print terms come out spelled right.
 # Kept to one short sentence: on short recordings the model sometimes echoes
 # the prompt into the text (see _strip_prompt_echo).
-TRANSCRIBE_PROMPT = ("STE Slicer, 3D-печать: Proto PLA, Enduse PETG, Fiberpart PA12, Sealant TPU, режимы 5D и "
+TRANSCRIBE_PROMPT = ("Стерео, STE Slicer, 3D-печать: Proto PLA, Enduse PETG, Fiberpart PA12, Sealant TPU, режимы 5D и "
                      "5D Spiral, высота слоя, поддержки, кайма, ретракт.")
 
 
@@ -110,6 +110,7 @@ class _Recorder(object):
         self._thread = None
         self._started = None
         self._timer = None
+        self._bits = 16
 
     # MCI calls all go through one thread, whoever asks for them.
     def _run(self, fn):
@@ -133,6 +134,9 @@ class _Recorder(object):
             except Exception as e:
                 box["error"] = e if isinstance(e, VoiceError) else VoiceError("Ошибка записи звука: %s" % e)
             done.set()
+
+    # (samples per second, channels); (0, 0) = the device's own default format
+    FORMATS = ((16000, 1), (44100, 1), (48000, 1), (44100, 2), (48000, 2), (0, 0))
 
     def _mci(self, command):
         import ctypes
@@ -161,19 +165,27 @@ class _Recorder(object):
         def job():
             if self._started is not None:
                 return
-            self._close()
-            self._mci("open new type waveaudio alias " + self.ALIAS)
-            try:
-                self._mci("set %s time format ms bitspersample 16 channels 1 samplespersec 16000 "
-                          "bytespersec 32000 alignment 2" % self.ALIAS)
-            except VoiceError:
-                pass  # the device default (11 kHz mono) is still fine for speech
-            try:
-                self._mci("record " + self.ALIAS)
-            except VoiceError:
+            # Some drivers refuse 16 kHz mono with MCI error 328 ("no installed
+            # wave device can record files in the current format"), so try the
+            # formats a microphone is likely to support, smallest first.
+            error = None
+            for rate, channels in self.FORMATS:
                 self._close()
-                raise
-            self._started = time.time()
+                self._mci("open new type waveaudio alias " + self.ALIAS)
+                try:
+                    self._bits = 16 if rate else 8
+                    if rate:
+                        align = 2 * channels
+                        self._mci("set %s time format ms bitspersample 16 channels %d samplespersec %d "
+                                  "bytespersec %d alignment %d" % (self.ALIAS, channels, rate, rate * align, align))
+                    self._mci("record " + self.ALIAS)
+                except VoiceError as e:
+                    error = e
+                    continue
+                self._started = time.time()
+                return
+            self._close()
+            raise error
 
         self._run(job)
         self._arm_timer()
@@ -200,6 +212,22 @@ class _Recorder(object):
                     pass
 
         self._disarm_timer()
+        return self._run(job)
+
+    def level(self):
+        """The current input peak while recording (MCI "status level"), as a
+        fraction of full scale, or None when the device does not report it."""
+        def job():
+            if self._started is None:
+                return None
+            try:
+                value = int(self._mci("status %s level" % self.ALIAS) or 0)
+            except (VoiceError, ValueError):
+                return None
+            return value / (32767.0 if self._bits == 16 else 127.0)
+
+        if not is_available():
+            return None
         return self._run(job)
 
     def cancel(self):
@@ -237,10 +265,256 @@ def _short_temp_dir():
     return path
 
 
-recorder = _Recorder()
+class _WaveInRecorder(object):
+    """Records with the waveIn API (winmm via ctypes): 16 kHz mono 16-bit through
+    the wave mapper, which converts from whatever the microphone delivers. Unlike
+    MCI it hands over the samples as they come, so the input level is known for
+    the pause detection and the waves around the microphone button."""
+    RATE = 16000
+    CHUNK = 1600 * 2          # 100 ms of 16-bit mono
+    BUFFERS = 8
+
+    def __init__(self, winmm=None):
+        self._winmm = winmm
+        self._handle = None
+        self._headers = []
+        self._chunks = []
+        self._peak = 0.0
+        self._stop = threading.Event()
+        self._thread = None
+        self._lock = threading.Lock()
+        self._started = None
+
+    def _api(self):
+        if self._winmm is None:
+            import ctypes
+            self._winmm = ctypes.windll.winmm
+        return self._winmm
+
+    def _check(self, err, what):
+        if err:
+            raise VoiceError("Не удалось записать звук: %s вернул код %d. Проверьте, что микрофон подключён "
+                             "и включён в параметрах звука Windows." % (what, err))
+
+    def recording(self):
+        return self._started is not None
+
+    def start(self):
+        import ctypes
+        if self._started is not None:
+            return
+        api = self._api()
+        fmt = _WAVEFORMATEX(1, 1, self.RATE, self.RATE * 2, 2, 16, 0)
+        handle = ctypes.c_void_p()
+        self._check(api.waveInOpen(ctypes.byref(handle), ctypes.c_uint(0xFFFFFFFF), ctypes.byref(fmt), 0, 0, 0),
+                    "waveInOpen")
+        self._handle = handle
+        self._chunks = []
+        self._peak = 0.0
+        self._headers = []
+        try:
+            for _ in range(self.BUFFERS):
+                buf = ctypes.create_string_buffer(self.CHUNK)
+                hdr = _WAVEHDR()
+                hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
+                hdr.dwBufferLength = self.CHUNK
+                self._headers.append((hdr, buf))
+                self._check(api.waveInPrepareHeader(handle, ctypes.byref(hdr), ctypes.sizeof(hdr)), "waveInPrepareHeader")
+                self._check(api.waveInAddBuffer(handle, ctypes.byref(hdr), ctypes.sizeof(hdr)), "waveInAddBuffer")
+            self._check(api.waveInStart(handle), "waveInStart")
+        except VoiceError:
+            self._close()
+            raise
+        self._stop.clear()
+        self._started = time.time()
+        self._thread = threading.Thread(target=self._pump, name="ste-ai-wavein", daemon=True)
+        self._thread.start()
+
+    def _take(self, hdr, buf):
+        """A filled buffer: keep its samples, note the peak, give it back to the driver."""
+        import ctypes
+        data = buf.raw[:hdr.dwBytesRecorded]
+        if data:
+            self._chunks.append(data)
+            self._peak = _peak16(data)
+        hdr.dwBytesRecorded = 0
+        hdr.dwFlags &= ~WHDR_DONE
+        return data
+
+    def _pump(self):
+        import ctypes
+        api = self._api()
+        while not self._stop.is_set():
+            with self._lock:
+                for hdr, buf in self._headers:
+                    if hdr.dwFlags & WHDR_DONE:
+                        self._take(hdr, buf)
+                        api.waveInAddBuffer(self._handle, ctypes.byref(hdr), ctypes.sizeof(hdr))
+            if time.time() - (self._started or time.time()) > MAX_RECORD_SEC:
+                break
+            time.sleep(0.02)
+
+    def _close(self):
+        import ctypes
+        api = self._api()
+        if self._handle is None:
+            return
+        try:
+            api.waveInStop(self._handle)
+            api.waveInReset(self._handle)   # marks the buffers still queued as done
+            for hdr, buf in self._headers:
+                if hdr.dwFlags & WHDR_DONE and hdr.dwBytesRecorded:
+                    self._take(hdr, buf)
+                api.waveInUnprepareHeader(self._handle, ctypes.byref(hdr), ctypes.sizeof(hdr))
+        finally:
+            api.waveInClose(self._handle)
+            self._handle = None
+            self._headers = []
+
+    def _finish(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(2)
+            self._thread = None
+        with self._lock:
+            self._close()
+        self._started = None
+
+    def stop(self):
+        """Ends the recording and returns it as WAV bytes."""
+        if self._started is None:
+            raise VoiceError("Запись не идёт: нажмите микрофон, чтобы начать")
+        self._finish()
+        pcm = b"".join(self._chunks)
+        self._chunks = []
+        return _wav16(pcm, self.RATE)
+
+    def cancel(self):
+        if self._started is not None:
+            self._finish()
+        self._chunks = []
+
+    def level(self):
+        return self._peak if self._started is not None else None
+
+
+WHDR_DONE = 0x1
+
+
+def _peak16(data):
+    """Peak of 16-bit little-endian samples, 0..1. numpy, not the array module:
+    the slicer's bundled Python has only the stdlib modules the slicer itself uses."""
+    import numpy
+    samples = numpy.frombuffer(data[:len(data) - len(data) % 2], dtype="<i2")
+    if not samples.size:
+        return 0.0
+    return min(1.0, float(numpy.abs(samples.astype(numpy.int32)).max()) / 32768.0)
+
+
+def _wav16(pcm, rate):
+    """A mono 16-bit WAV file around raw samples (no `wave` module in the slicer's Python)."""
+    import struct
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
+
+
+def _structs():
+    import ctypes
+
+    class WAVEFORMATEX(ctypes.Structure):
+        _fields_ = [("wFormatTag", ctypes.c_ushort), ("nChannels", ctypes.c_ushort),
+                    ("nSamplesPerSec", ctypes.c_uint32), ("nAvgBytesPerSec", ctypes.c_uint32),
+                    ("nBlockAlign", ctypes.c_ushort), ("wBitsPerSample", ctypes.c_ushort),
+                    ("cbSize", ctypes.c_ushort)]
+
+    class WAVEHDR(ctypes.Structure):
+        pass
+    WAVEHDR._fields_ = [("lpData", ctypes.c_void_p), ("dwBufferLength", ctypes.c_uint32),
+                        ("dwBytesRecorded", ctypes.c_uint32), ("dwUser", ctypes.c_size_t),
+                        ("dwFlags", ctypes.c_uint32), ("dwLoops", ctypes.c_uint32),
+                        ("lpNext", ctypes.c_void_p), ("reserved", ctypes.c_size_t)]
+    return WAVEFORMATEX, WAVEHDR
+
+
+_WAVEFORMATEX, _WAVEHDR = _structs()
+
+
+class _Voice(object):
+    """waveIn first (levels for the pause detection and the waves); MCI when
+    waveIn cannot open the microphone."""
+
+    def __init__(self):
+        self.wavein = _WaveInRecorder()
+        self.mci = _Recorder()
+        self.active = None
+
+    def start(self):
+        if not is_available():
+            raise VoiceError("Запись звука в плагине работает только на Windows")
+        if self.active is not None and self.active.recording():
+            return
+        try:
+            self.wavein.start()
+            self.active = self.wavein
+        except Exception:
+            self.mci.start()
+            self.active = self.mci
+
+    def stop(self):
+        if self.active is None:
+            raise VoiceError("Запись не идёт: нажмите микрофон, чтобы начать")
+        active, self.active = self.active, None
+        return active.stop()
+
+    def cancel(self):
+        active, self.active = self.active, None
+        if active is not None:
+            active.cancel()
+
+    def level(self):
+        """The input peak, 0..1, or None (not recording, or MCI that does not report it)."""
+        return self.active.level() if self.active is not None else None
+
+
+recorder = _Voice()
 start = recorder.start
 stop = recorder.stop
 cancel = recorder.cancel
+level = recorder.level
+
+
+class SilenceDetector(object):
+    """Ends dictation after a pause: fed the input level every ~0.25 s, says
+    "stop" once speech was heard and then `pause` seconds passed below the
+    speech threshold. The threshold follows the room's noise floor. If the
+    device reports no level, or the level never moves, it never stops on its
+    own and the user stops with the button."""
+
+    def __init__(self, pause=4.0):
+        self.pause = pause
+        self.floor = None
+        self.heard = False
+        self.quiet_since = None
+
+    def feed(self, value, now):
+        if value is None:
+            return False
+        # noise floor: follows quiet levels at once, louder ones only slowly
+        if self.floor is None or value < self.floor:
+            self.floor = value
+        else:
+            self.floor += (value - self.floor) * 0.01
+        speaking = value > max(self.floor * 3, self.floor + 0.04)
+        if speaking:
+            self.heard = True
+            self.quiet_since = None
+            return False
+        if not self.heard:
+            return False
+        if self.quiet_since is None:
+            self.quiet_since = now
+        return now - self.quiet_since >= self.pause
 
 
 # ---------- speech to text
@@ -324,7 +598,19 @@ def transcribe(audio, mime="audio/wav"):
         text = json.loads(raw).get("text", "")
     except (ValueError, AttributeError):
         text = raw  # response_format=text on some gateways
-    return {"text": _strip_prompt_echo(text or ""), "model": model}
+    return {"text": strip_address(_strip_prompt_echo(text or "")), "model": model}
+
+
+_ADDRESS = re.compile(r"^\s*(?:(?:эй|слушай|ок|окей|привет)[\s,]+)?стерео\b[\s,.!:;—–-]*", re.IGNORECASE)
+
+
+def strip_address(text):
+    """"Стерео, сделай …" → "Сделай …": the assistant's name at the start of a
+    phrase is an address, not part of the request."""
+    rest = _ADDRESS.sub("", text, count=1)
+    if rest == text or not rest:
+        return text
+    return rest[:1].upper() + rest[1:]
 
 
 def _words(text):

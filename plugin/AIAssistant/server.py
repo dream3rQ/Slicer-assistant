@@ -158,7 +158,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # The plan card's buttons: apply (with the user's edits), revise (text), reject.
                 try:
                     session.answer_proposal(payload.get("id"), payload.get("action"), payload.get("overrides"),
-                                            payload.get("skip"), payload.get("text"))
+                                            payload.get("skip"), payload.get("text"), payload.get("remember"))
                 except (RuntimeError, ValueError) as e:
                     self._send_json({"error": str(e)}, 409)
                     return

@@ -115,18 +115,38 @@ class Session:
         thread = threading.Thread(target=self._run, name="ste-ai-agent", daemon=True)
         thread.start()
 
+    def retry(self):
+        """Run the agent again after an error, without a new user message: the
+        history already ends with the user's request (or tool results). After
+        the step limit it ends with the assistant, so ask it to go on."""
+        with self.lock:
+            if self.busy:
+                raise RuntimeError("Ассистент ещё отвечает на предыдущее сообщение")
+            if not self.messages:
+                raise RuntimeError("Повторять нечего: диалог пуст")
+            self.busy = True
+            self.cancel_requested = False
+        if self.messages[-1].get("role") == "assistant":
+            self.emit("user", {"text": "Продолжи", "attachments": []})
+            self.messages.append({"role": "user", "content": "Продолжи"})
+        else:
+            self.emit("status", {"text": "Повторяю запрос…"})
+        threading.Thread(target=self._run, name="ste-ai-agent", daemon=True).start()
+
     def cancel(self):
         self.cancel_requested = True
 
-    def answer_proposal(self, proposal_id, action, overrides=None, skip=None, text=None):
+    def answer_proposal(self, proposal_id, action, overrides=None, skip=None, text=None, remember=None):
         if action not in PROPOSAL_ACTIONS:
             raise ValueError("action: одно из %s" % ", ".join(PROPOSAL_ACTIONS))
         with self.lock:
             proposal = self.proposal
             if proposal is None or proposal["id"] != proposal_id:
                 raise RuntimeError("Предложение уже закрыто")
+            # remember: [{"keys": [item id], "scope": ...}] from "Запомнить" in the card, for agent/memory.py
             self._answer(proposal, {"action": action, "overrides": dict(overrides or {}),
-                                    "skip": list(skip or []), "text": (text or "").strip()})
+                                    "skip": list(skip or []), "text": (text or "").strip(),
+                                    "remember": list(remember or [])})
 
     def _answer(self, proposal, answer):
         if proposal["answer"] is None:

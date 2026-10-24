@@ -45,6 +45,7 @@ def mount(name, context, properties=None, in_topbar=False):
     if topbar is None:
         Logger.log("w", "AI Assistant: slicer top bar not found, %s not mounted", name)
         return None
+    load_fonts()
     item = Application.getInstance().createQmlComponent(os.path.join(QML_DIR, name + ".qml"), context)
     if item is None:
         return None
@@ -61,15 +62,34 @@ def mount(name, context, properties=None, in_topbar=False):
     return item
 
 
+_fonts_loaded = False
+
+
+def load_fonts():
+    """Register the bundled Inter (the designers' font, OFL licence) with Qt once,
+    before our QML is created; qml/Style.qml falls back to the slicer's font
+    when it is missing."""
+    global _fonts_loaded
+    if _fonts_loaded:
+        return
+    _fonts_loaded = True
+    from PyQt5.QtGui import QFontDatabase
+    folder = os.path.join(os.path.dirname(QML_DIR), "fonts")
+    for name in ("Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf"):
+        if QFontDatabase.addApplicationFont(os.path.join(folder, name)) < 0:
+            Logger.log("w", "AI Assistant: font %s not loaded", name)
+
+
 class SlicerUI(QObject):
     # Session events arrive on worker threads; this signal hands them to the Qt
     # main thread (queued connection), where items may be touched.
     _event = pyqtSignal(object, object)
     proposalChanged = pyqtSignal()
 
-    def __init__(self, extension, parent=None):
+    def __init__(self, extension, memory, parent=None):
         super().__init__(parent)
         self._extension = extension
+        self._memory = memory
         self._card = None
         self._proposal = None
         self._session = None
@@ -81,13 +101,23 @@ class SlicerUI(QObject):
     def proposalJson(self):
         return json.dumps(self._proposal or {"items": []}, ensure_ascii=False)
 
+    @pyqtProperty(QObject, constant=True)
+    def memory(self):
+        return self._memory
+
     @pyqtSlot(str, str, str, str)
     def answer(self, action, overrides_json, skip_json, text):
+        self.answerRemember(action, overrides_json, skip_json, text, "[]")
+
+    @pyqtSlot(str, str, str, str, str)
+    def answerRemember(self, action, overrides_json, skip_json, text, remember_json):
+        """remember_json: [{"keys": [item id, ...], "scope": "part|material|global"}],
+        the rows ticked "Запомнить", one entry per scope (see docs/plan-card.md)."""
         if self._session is None or self._proposal is None:
             return
         try:
             self._session.answer_proposal(self._proposal["id"], action, json.loads(overrides_json or "{}"),
-                                          json.loads(skip_json or "[]"), text)
+                                          json.loads(skip_json or "[]"), text, json.loads(remember_json or "[]"))
         except (RuntimeError, ValueError) as e:
             Message(str(e), title="AI Assistant", lifetime=10).show()
             self._close()
@@ -112,6 +142,7 @@ class SlicerUI(QObject):
             if config.get("slicer_popups"):
                 self._show()
         elif kind == "proposal_closed" and self._proposal and data.get("id") == self._proposal.get("id"):
+            self._memory.record_from_card(self._proposal, data)
             self._close()
         elif not config.get("slicer_popups") or self._extension.panelVisible():
             return  # the answer is already in front of the user
