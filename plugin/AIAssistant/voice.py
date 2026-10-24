@@ -385,17 +385,9 @@ class _WaveInRecorder(object):
         if self._started is None:
             raise VoiceError("Запись не идёт: нажмите микрофон, чтобы начать")
         self._finish()
-        import io
-        import wave
-        out = io.BytesIO()
-        w = wave.open(out, "wb")
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(self.RATE)
-        w.writeframes(b"".join(self._chunks))
-        w.close()
+        pcm = b"".join(self._chunks)
         self._chunks = []
-        return out.getvalue()
+        return _wav16(pcm, self.RATE)
 
     def cancel(self):
         if self._started is not None:
@@ -410,13 +402,21 @@ WHDR_DONE = 0x1
 
 
 def _peak16(data):
-    """Peak of 16-bit little-endian samples, 0..1."""
-    import array
-    samples = array.array("h")
-    samples.frombytes(data[:len(data) - len(data) % 2])
-    if not samples:
+    """Peak of 16-bit little-endian samples, 0..1. numpy, not the array module:
+    the slicer's bundled Python has only the stdlib modules the slicer itself uses."""
+    import numpy
+    samples = numpy.frombuffer(data[:len(data) - len(data) % 2], dtype="<i2")
+    if not samples.size:
         return 0.0
-    return min(1.0, max(abs(max(samples)), abs(min(samples))) / 32768.0)
+    return min(1.0, float(numpy.abs(samples.astype(numpy.int32)).max()) / 32768.0)
+
+
+def _wav16(pcm, rate):
+    """A mono 16-bit WAV file around raw samples (no `wave` module in the slicer's Python)."""
+    import struct
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
 
 
 def _structs():
