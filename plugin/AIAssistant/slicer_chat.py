@@ -9,7 +9,7 @@ import os
 import re
 import threading
 
-from PyQt5.QtCore import QObject, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QEvent, QObject, QPointF, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 
 from . import voice
 from .agent import config, llm, session as session_module
@@ -80,10 +80,37 @@ class SlicerChat(QObject):
                 return False
             if self._button is not None:
                 self._button.setProperty("panel", self._panel)
+            window = self._panel.window()
+            if window is not None:
+                window.installEventFilter(self)
         if self._session is not server.session:
             self._replay(server.session)
         self._panel.setProperty("visible", True)
         config.set_many({"panel_open": True})
+        return True
+
+    def eventFilter(self, obj, event):
+        """Files dragged onto the panel are the assistant's. The slicer's window has
+        a drop area of its own that opens files on the build plate; filtering the
+        window's drag events here catches them before any QML item sees them."""
+        kind = event.type()
+        if kind not in (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop):
+            return False
+        panel = self._panel
+        over = False
+        if panel is not None and panel.property("visible") and kind != QEvent.DragLeave and event.mimeData().hasUrls():
+            top_left = panel.mapToScene(QPointF(0, 0))
+            pos = event.pos()
+            over = (top_left.x() <= pos.x() < top_left.x() + panel.width()
+                    and top_left.y() <= pos.y() < top_left.y() + panel.height())
+        if panel is not None and bool(panel.property("fileDrag")) != over:
+            panel.setProperty("fileDrag", over)
+        if not over:
+            return False
+        if kind == QEvent.Drop:
+            self.addFiles([url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()])
+        event.setDropAction(1)  # Qt.CopyAction
+        event.accept()
         return True
 
     def isVisible(self):
