@@ -171,6 +171,7 @@ Rectangle {
         height: 44
         readonly property bool working: messages.count > 0
         Text {
+            id: headerTitle
             anchors.verticalCenter: parent.verticalCenter
             x: header.working ? parent.width - width - 23 : 18
             text: "Stereo Agent"
@@ -183,22 +184,54 @@ Rectangle {
             Icon { anchors.centerIn: parent; name: "collapse_chevron"; width: 5; height: 9 }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: manager.hide() }
         }
-        Item {  // "Память агента": the rules and the journal of edits (MemoryWindow.qml)
-            id: memoryButton
-            visible: !!manager.memory
-            x: header.working ? 38 : parent.width - 13 - 30 - width - 4
-            width: memoryIcon.width + 6 + memoryLabel.implicitWidth + 12; height: parent.height
-            Rectangle { anchors.centerIn: parent; width: parent.width; height: 26; radius: 13; color: memoryArea.containsMouse ? st.groupBg : "transparent" }
-            Icon { id: memoryIcon; x: 6; anchors.verticalCenter: parent.verticalCenter; name: "memory"; width: 16; height: 16 }
-            Text {
-                id: memoryLabel
-                x: memoryIcon.x + memoryIcon.width + 5
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Память"
-                color: st.textSecondary
-                font.family: st.family; font.pixelSize: 12
+        Row {  // "Память" (MemoryWindow.qml) and "База знаний" (KnowledgeWindow.qml)
+            id: headerTools
+            // the labels shrink when they would run into the title: "База знаний" -> "Знания" -> icon, then "Память" -> icon
+            readonly property real room: header.working ? header.width - 23 - headerTitle.width - 12 - 38
+                                                        : header.width - 13 - 30 - 4 - 18 - headerTitle.width - 12
+            readonly property real memoryFull: 16 + 18 + 5 + memoryMetrics.width
+            readonly property bool memoryLabelFits: room >= memoryFull + 16 + 12
+            readonly property string knowledgeText: room >= memoryFull + 16 + 18 + 5 + knowledgeMetrics.width ? "База знаний"
+                                                  : room >= memoryFull + 16 + 18 + 5 + knowledgeShortMetrics.width ? "Знания" : ""
+            TextMetrics { id: memoryMetrics; font.family: st.family; font.pixelSize: 12; text: "Память" }
+            TextMetrics { id: knowledgeMetrics; font.family: st.family; font.pixelSize: 12; text: "База знаний" }
+            TextMetrics { id: knowledgeShortMetrics; font.family: st.family; font.pixelSize: 12; text: "Знания" }
+            x: header.working ? 38 : header.width - 13 - 30 - width - 4
+            height: parent.height
+            Item {
+                id: memoryButton
+                visible: !!manager.memory
+                width: memoryIcon.width + 12 + (memoryLabel.visible ? 5 + memoryLabel.implicitWidth : 0) + (memoryLabel.visible ? 6 : 0); height: parent.height
+                Rectangle { anchors.centerIn: parent; width: parent.width; height: 26; radius: 13; color: memoryArea.containsMouse ? st.groupBg : "transparent" }
+                Icon { id: memoryIcon; x: 6; anchors.verticalCenter: parent.verticalCenter; name: "memory"; width: 16; height: 16 }
+                Text {
+                    id: memoryLabel
+                    visible: headerTools.memoryLabelFits
+                    x: memoryIcon.x + memoryIcon.width + 5
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Память"
+                    color: st.textSecondary
+                    font.family: st.family; font.pixelSize: 12
+                }
+                MouseArea { id: memoryArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: memoryWindow.open() }
             }
-            MouseArea { id: memoryArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: memoryWindow.open() }
+            Item {
+                id: knowledgeButton
+                visible: !!manager.knowledge
+                width: knowledgeIcon.width + 12 + (knowledgeLabel.visible ? 5 + knowledgeLabel.implicitWidth : 0) + (knowledgeLabel.visible ? 6 : 0); height: parent.height
+                Rectangle { anchors.centerIn: parent; width: parent.width; height: 26; radius: 13; color: knowledgeArea.containsMouse ? st.groupBg : "transparent" }
+                Icon { id: knowledgeIcon; x: 6; anchors.verticalCenter: parent.verticalCenter; name: "book"; width: 16; height: 16 }
+                Text {
+                    id: knowledgeLabel
+                    visible: headerTools.knowledgeText !== ""
+                    x: knowledgeIcon.x + knowledgeIcon.width + 5
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: headerTools.knowledgeText
+                    color: st.textSecondary
+                    font.family: st.family; font.pixelSize: 12
+                }
+                MouseArea { id: knowledgeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: knowledgeWindow.open() }
+            }
         }
         Item {
             visible: !header.working
@@ -612,6 +645,13 @@ Rectangle {
     Connections {
         target: manager.memory
         onWindowRequested: memoryWindow.open()
+    }
+
+    // ---- the knowledge base: materials.csv as a form, knowledge/*.md as text
+    KnowledgeWindow { id: knowledgeWindow; knowledge: manager.knowledge }
+    Connections {
+        target: manager.knowledge
+        onWindowRequested: knowledgeWindow.open()
     }
 
     // ---- settings window

@@ -6,6 +6,7 @@ from UM.Extension import Extension
 from UM.Logger import Logger
 
 from .agent import config
+from .knowledge_ui import KnowledgeBridge
 from .memory_ui import MemoryBridge
 from .server import ChatServer
 from .slicer_chat import SlicerChat
@@ -22,12 +23,14 @@ class AIAssistant(Extension):
         config.init()
         self._memory = MemoryBridge(open_panel=lambda: self._chat.show())
         self._ui = SlicerUI(self, self._memory)
-        self._chat = SlicerChat(self, self._ui, self._memory)
+        self._knowledge = KnowledgeBridge(open_panel=lambda: self._chat.show())
+        self._chat = SlicerChat(self, self._ui, self._memory, self._knowledge)
         self.setMenuName("AI Assistant")
         self.addMenuItem("Open chat", self.showChat)
         self.addMenuItem("Open chat in browser", self.showChatInBrowser)
         self.addMenuItem("New conversation", self.newConversation)
         self.addMenuItem("Agent memory", self._memory.open)
+        self.addMenuItem("Knowledge base", self._knowledge.open)
         self.addMenuItem("Settings", self._chat.openSettings)
         Application.getInstance().engineCreatedSignal.connect(self._chat.mountUi)
 

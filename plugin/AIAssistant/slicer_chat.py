@@ -55,11 +55,12 @@ class SlicerChat(QObject):
     voiceChanged = pyqtSignal()
     voiceText = pyqtSignal(str, arguments=["text"])
 
-    def __init__(self, extension, card, memory, parent=None):
+    def __init__(self, extension, card, memory, knowledge=None, parent=None):
         super().__init__(parent)
         self._extension = extension
         self._card = card
         self._memory = memory
+        self._knowledge = knowledge
         self._panel = None
         self._button = None
         self._session = None
@@ -154,6 +155,11 @@ class SlicerChat(QObject):
     def memory(self):
         """memory_ui.MemoryBridge: the "Память агента" window in the panel."""
         return self._memory
+
+    @pyqtProperty(QObject, constant=True)
+    def knowledge(self):
+        """knowledge_ui.KnowledgeBridge: the "База знаний" window in the panel."""
+        return self._knowledge
 
     @pyqtProperty(bool, notify=busyChanged)
     def busy(self):
